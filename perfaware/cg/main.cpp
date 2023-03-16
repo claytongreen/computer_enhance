@@ -1,13 +1,14 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <stdio.h>
-//#include <malloc.h>
 #include <intrin.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdarg.h>
 
 #define assert(Cond) do { if (!(Cond)) __debugbreak(); } while (0)
+
+// TODO: Instead of using assert, have an error flag so we can break and then print out what we've disassembled and then the error
 
 // MEMORY ---------------------------------------------------------------------
 static size_t global_memory_size = 4096 * 8;
@@ -42,10 +43,18 @@ static string_t read_entire_file(char* filename) {
 
 // PROGRAM --------------------------------------------------------------------
 
+static string_t empty_str = STRING_LIT("");
+static string_t none_str = STRING_LIT("none");
+// TODO: remove
+static string_t unknown_str = STRING_LIT("???");     
+
 enum operand_t {
-  OPERAND_UNKNOWN,
+  OPERAND_NONE,
+  // ------------------
   OPERAND_ADD,
   OPERAND_CMP,
+  OPERAND_DEC,
+  OPERAND_INC,
   OPERAND_JA,
   OPERAND_JB,
   OPERAND_JBE,
@@ -73,9 +82,11 @@ enum operand_t {
 };
 
 static string_t operand_names[OPERAND_COUNT] = {
-  STRING_LIT("UNKNOWN"),
+  none_str,
   STRING_LIT("add"),
   STRING_LIT("cmp"),
+  STRING_LIT("dec"),
+  STRING_LIT("inc"),
   STRING_LIT("ja"),
   STRING_LIT("jb"),
   STRING_LIT("jbe"),
@@ -101,6 +112,8 @@ static string_t operand_names[OPERAND_COUNT] = {
 };
 
 enum register_t {
+  REGISTER_NONE,
+  // --------------
   REGISTER_AL,
   REGISTER_CL,
   REGISTER_DL,
@@ -122,6 +135,7 @@ enum register_t {
 };
 
 static string_t register_names[REGISTER_COUNT] = {
+  none_str,
   STRING_LIT("al"),
   STRING_LIT("cl"),
   STRING_LIT("dl"),
@@ -140,18 +154,30 @@ static string_t register_names[REGISTER_COUNT] = {
   STRING_LIT("di"),
 };
 
-// TODO: remove
-string_t unknown_str = STRING_LIT("???");     
+enum effective_address_t {
+  EFFECTIVE_ADDRESS_DIRECT,
+  EFFECTIVE_ADDRESS_BX_SI,
+  EFFECTIVE_ADDRESS_BX_DI,
+  EFFECTIVE_ADDRESS_BP_SI,
+  EFFECTIVE_ADDRESS_BP_DI,
+  EFFECTIVE_ADDRESS_SI,
+  EFFECTIVE_ADDRESS_DI,
+  EFFECTIVE_ADDRESS_BP,
+  EFFECTIVE_ADDRESS_BX,
+  // --------------
+  EFFECTIVE_ADDRESS_COUNT,
+};
 
-static string_t address_names[8] = {
+static string_t address_names[EFFECTIVE_ADDRESS_COUNT] = {
+  empty_str,
   STRING_LIT("bx + si"),
   STRING_LIT("bx + di"),
   STRING_LIT("bp + si"),
   STRING_LIT("bp + di"),
-  STRING_LIT("si"),
-  STRING_LIT("di"),
-  STRING_LIT("bp"),
-  STRING_LIT("bx"),
+  register_names[REGISTER_SI],
+  register_names[REGISTER_DI],
+  register_names[REGISTER_BP],
+  register_names[REGISTER_BX],
 };
 
 static uint8_t next_byte(string_t* instruction_stream) {
@@ -165,18 +191,11 @@ static uint8_t next_byte(string_t* instruction_stream) {
 }
 
 static int16_t next_data_s16(string_t *instruction_stream) {
-  uint8_t lo = next_byte(instruction_stream);
-  uint8_t hi = ((lo & 0x80) ? 0xff : 0);
-  int16_t data = (((int16_t)hi) << 8) | (int16_t)lo;
+  uint8_t data = (int16_t)next_byte(instruction_stream);
   return data;
 }
 
-static int8_t next_data_s8(string_t *instruction_stream) {
-  int8_t data = (int8_t)next_byte(instruction_stream);
-  return data;
-}
-
-static uint16_t next_data(string_t* instruction_stream, uint8_t w) {
+static uint16_t next_data_u16(string_t* instruction_stream, uint8_t w) {
   uint8_t lo = next_byte(instruction_stream);
   uint8_t hi = (w == 1) ? next_byte(instruction_stream) : ((lo & 0x80) ? 0xff : 0);
 
@@ -185,44 +204,28 @@ static uint16_t next_data(string_t* instruction_stream, uint8_t w) {
   return data;
 }
 
-// TODO: probably just a uint here
-static string_t next_address(string_t* instruction_stream, uint8_t w) {
-  // TODO: addresses are always wide?
-  uint16_t data = next_data(instruction_stream, w);
-  string_t address = string_pushf("[%d]", data);
-  return address;
-}
-
 static string_t next_effective_address(string_t *instruction_stream, uint8_t mod, uint8_t rm) {
-  string_list_t address_builder = {0};//PUSH_ARRAY(string_list_t, 1);
-  string_list_push(&address_builder, string_cstring("["));
+  string_t result;
+
   if (mod == 0 && rm == 6) {
-    uint16_t data = next_data(instruction_stream, 1);
-    assert(data != 0 && "Require a direct address in an effective address calculation");
-
-    string_list_pushf(&address_builder, "%d", data);
+    uint16_t data = next_data_u16(instruction_stream, 1);
+    result = string_pushf("[%d]", data);
   } else {
-    string_list_push(&address_builder, address_names[rm]);
-    if (mod) {
-      uint16_t data = next_data(instruction_stream, mod == 2 ? 1 : 0);
-
-      // only print if offset isn't 0
-      if (data) {
-        string_list_pushf(
-          &address_builder, " %s %d",
-          data < 0 ? "-" : "+",
-          data < 0 ? (data * -1) : data
-        );
-      }
+    uint16_t data = mod ? next_data_u16(instruction_stream, mod == 2 ? 1 : 0) : 0;
+    // only print if offset isn't 0
+    if (data) {
+      // TODO: is there a better way to print +/-
+      result = string_pushf("[%.*s %s %d]", STRING_FMT(address_names[rm + 1]), data < 0 ? "-" : "+", data < 0 ? (data * -1) : data);
+    } else {
+      result = string_pushf("[%.*s]", STRING_FMT(address_names[rm + 1]));
     }
   }
-  string_list_push(&address_builder, string_cstring("]"));
-  string_t address = string_list_join(&address_builder);
-  return address;
+
+  return result;
 }
 
 static string_t next_register_memory(string_t *instruction_stream, uint8_t w, uint8_t mod, uint8_t rm) {
-  string_t result = (mod == 3) ? register_names[(w * 8) + rm] : next_effective_address(instruction_stream, mod, rm);
+  string_t result = (mod == 3) ? register_names[(w * 8) + rm + 1] : next_effective_address(instruction_stream, mod, rm);
   return result;
 }
 
@@ -264,6 +267,7 @@ int main(int argc, char** argv) {
   label_t labels[4];
   size_t label_count = 0;
 
+  string_t error = { 0 };
   cmd_t *last_cmd = NULL;
   for (;;) {
     if (instruction_stream.length == 0) break;
@@ -325,13 +329,14 @@ int main(int argc, char** argv) {
           case 0x8B: operand = OPERAND_MOV; break;
 
           default: 
-            printf("\n!!! Unexpected operand 0x%x\n", b1);
-            assert(false && "Unexpected operand");
+            error = string_pushf("\n!!! Unexpected operand 0x%x\n", b1);
             break;
         }
 
-        dest    = d ? register_names[w * 8 + reg] : register_memory_name;
-        source  = d ? register_memory_name : register_names[w * 8 + reg];
+        string_t register_name = register_names[w * 8 + (reg + 1)];
+
+        dest    = d ? register_name : register_memory_name;
+        source  = d ? register_memory_name : register_name;
       } break;
 
       case 0x04: // ADD b,ia
@@ -343,7 +348,7 @@ int main(int argc, char** argv) {
       {
         uint8_t w = (b1 >> 0) & 1;
 
-        uint16_t data = next_data(&instruction_stream, w);
+        uint16_t data = next_data_u16(&instruction_stream, w);
 
         switch (b1) {
           case 0x04:
@@ -356,8 +361,7 @@ int main(int argc, char** argv) {
           case 0x3D: operand = OPERAND_CMP; break;
 
           default: 
-            printf("\n!!! Unexpected operand 0x%02x\n", b1);
-            assert(false && "Unexpected operand");
+            error = string_pushf("\n!!! Unexpected operand 0x%02x\n", b1);
             break;
         }
         switch (b1) {
@@ -370,8 +374,7 @@ int main(int argc, char** argv) {
           case 0x3D: dest = register_names[REGISTER_AX]; break;
 
           default: 
-            printf("\n!!! Unexpected dest 0x%02x\n", b1);
-            assert(false && "Unexpected dest");
+            error = string_pushf("\n!!! Unexpected dest 0x%02x\n", b1);
             break;
         }
         source = string_pushf("%d", data);
@@ -398,22 +401,24 @@ int main(int argc, char** argv) {
       case 0xE2: // LOOP
       case 0xE3: // JCXZ
       {
-        int8_t inc = next_data_s8(&instruction_stream);
+        int8_t inc = (int8_t)next_byte(&instruction_stream);
 
+        string_t label = empty_str;
         size_t label_ip = (instruction_stream.data - start) + inc;
-        assert(label_count < 4 && "Too many labels");
-
-        string_t label = { 0 };
-        for (size_t i = 0; i < label_count; i += 1) {
-          if (labels[i].ip == label_ip) {
-            label = labels[i].label;
-            break;
+        if (label_count < 4) {
+          for (size_t i = 0; i < label_count; i += 1) {
+            if (labels[i].ip == label_ip) {
+              label = labels[i].label;
+              break;
+            }
           }
-        }
 
-        if (!label.data) {
-          label = string_pushf("label%d", label_ip);
-          labels[label_count++] = { label_ip, label };
+          if (!label.length) {
+            label = string_pushf("label%d", label_ip);
+            labels[label_count++] = { label_ip, label };
+          }
+        } else {
+          error = STRING_LIT("Too many labels");
         }
 
         switch(b1) {
@@ -439,8 +444,7 @@ int main(int argc, char** argv) {
           case 0xE3: operand = OPERAND_JCXZ;   break;
 
           default:
-            printf("\n!!! Unexpected operand 0x%02x\n", b1);
-            assert(false && "Unexpected operand");
+            error = string_pushf("\n!!! Unexpected operand 0x%02x\n", b1);
             break;
         }
         dest = string_pushf("%.*s ; %d", STRING_FMT(label), inc);
@@ -464,7 +468,7 @@ int main(int argc, char** argv) {
         if (b1 == 0x83) {
           data = next_data_s16(&instruction_stream);
         } else {
-          data = next_data(&instruction_stream, w);
+          data = next_data_u16(&instruction_stream, w);
         }
 
         switch (op) {
@@ -491,7 +495,7 @@ int main(int argc, char** argv) {
         uint8_t d = (b1 >> 1) & 1;
         uint8_t w = (b1 >> 0) & 1;
 
-        string_t address = next_address(&instruction_stream, w);
+        string_t address = next_effective_address(&instruction_stream, 0, 6);
         register_t reg = w ? REGISTER_AX : REGISTER_AL;
 
         operand = OPERAND_MOV;
@@ -518,10 +522,10 @@ int main(int argc, char** argv) {
       {
         uint8_t w = b1 >= 0xB8; // TODO: does this "scale" (i.e. work for all values? probably not)
 
-        uint16_t data = next_data(&instruction_stream, w);
+        uint16_t data = next_data_u16(&instruction_stream, w);
 
         operand = OPERAND_MOV;
-        dest    = register_names[b1 - 0xB0];
+        dest    = register_names[b1 - 0xB0 + 1];
         source  = string_pushf("%d", data);
       } break;
 
@@ -536,22 +540,47 @@ int main(int argc, char** argv) {
         uint8_t rm  = (b2 >> 0) & 7;
 
         string_t address = next_effective_address(&instruction_stream, mod, rm);
-        uint16_t data    = next_data(&instruction_stream, w);
+        uint16_t data    = next_data_u16(&instruction_stream, w);
 
         operand = OPERAND_MOV;
         dest    = address;
         source  = string_pushf("%s %d", w ? "word" : "byte", data);
       } break;
 
+      // INC, DEC, CALL id, CALL l id, JMP id, PUSH, -
+      /*
+      case 0xFF: // Grp 2 w,r/m
+      {
+        uint8_t b2 = next_byte(&instruction_stream);
+        uint8_t mod = (b2 >> 6);
+        uint8_t op  = (b2 >> 3) & 7;
+        uint8_t rm  = (b2 >> 0) & 7;
+
+        error = string_pushf("TODO: ");
+
+        switch (op) {
+          case 0: break; // INC  MEM16
+          case 1: break; // DEC  MEM16
+          case 2: break; // CALL REG16/MEM16 (intra)
+          case 3: break; // CALL MEM16 (intersegment)
+          case 4: break; // JMP  REG16/MEM16 (intersegment)
+          case 6: break; // PUSH MEM16
+          case 7: assert(false); break; // (not used)
+        }
+
+      } break;
+      */
 
       default:
-        printf("\n!!! Unexpected instruction  %s  0x%x\n", bit_string_u8(b1), b1);
-        assert(false && "Unexpected instruction");
+        error = string_pushf("Unexpected instruction 0b%s", bit_string_u8(b1));
         break;
     }
 
+
     string_t text;
-    if (source.length) {
+    if (error.length) {
+      text = string_pushf("??? ; %.*s", STRING_FMT(error));
+    } else if (source.length) {
       text = string_pushf("%.*s %.*s, %.*s", STRING_FMT(operand_names[operand]), STRING_FMT(dest), STRING_FMT(source));
     } else {
       text = string_pushf("%.*s %.*s", STRING_FMT(operand_names[operand]), STRING_FMT(dest));
@@ -570,6 +599,8 @@ int main(int argc, char** argv) {
       cmd->first = cmd;
     }
     last_cmd = cmd;
+
+    if (error.length) break;
   }
 
   // Print the stuff
@@ -580,7 +611,6 @@ int main(int argc, char** argv) {
     printf("bits 16");
     printf("\n");
   }
-
 
   cmd_t *cmd = last_cmd->first;
   while (cmd != NULL) {
@@ -609,5 +639,5 @@ int main(int argc, char** argv) {
     cmd = cmd->next;
   }
 
-  return 0;
+  return error.length;
 }

@@ -121,18 +121,15 @@ static void string_list_pushf(string_list_t* list, const char* fmt, ...) {
 
 // ----------------------------------------------------------------------------
 
-// TODO: use "arena" and string api
-static char bits[16];
+static char bits[10] = "0000_0000";
 static char* bit_string_u8(uint8_t byte) {
-  for (size_t i = 0; i < 8; i += 1) {
+  for (size_t i = 0; i < 4; i += 1) {
     bits[i] = (byte >> (7 - i)) & 1 ? '1' : '0';
   }
-  bits[8] = 0;
-  return bits;
-}
-static char* bit_string_u16(uint16_t byte) {
-  for (size_t i = 0; i < 16; i += 1) {
-    bits[i] = (byte >> (15 - i)) & 1 ? '1' : '0';
+  for (size_t i = 4; i < 8; i += 1) {
+    bits[1 + i] = (byte >> (7 - i)) & 1 ? '1' : '0';
   }
+
   return bits;
 }
+
