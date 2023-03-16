@@ -243,13 +243,6 @@ int main(int argc, char** argv) {
 
   int print_bytes = argc > 2;
 
-  printf("; %s\n", filename);
-  printf("\n");
-  if (!print_bytes) {
-    printf("bits 16");
-    printf("\n");
-  }
-
   uint8_t *start = instruction_stream.data;
 
   struct cmd_t {
@@ -258,7 +251,8 @@ int main(int argc, char** argv) {
     cmd_t *next;
     cmd_t *prev;
 
-    size_t ip;
+    uint8_t *start;
+    uint8_t *end;
     string_t text;
   };
 
@@ -273,8 +267,6 @@ int main(int argc, char** argv) {
   cmd_t *last_cmd = NULL;
   for (;;) {
     if (instruction_stream.length == 0) break;
-
-    size_t ip = (size_t)(instruction_stream.data - start);
 
     operand_t operand;
     string_t dest = { 0 };
@@ -558,20 +550,6 @@ int main(int argc, char** argv) {
         break;
     }
 
-    if (print_bytes) {
-      size_t len = instruction_stream.data - instruction_stream_start;
-      // printf(" %s ", bit_string_u8(*instruction_stream_start));
-      printf("%3zd  ", ip);
-      for (size_t i = 0; i < 6; i += 1) {
-        if (i < len) {
-          printf("%02x ", *(instruction_stream_start + i));
-        } else {
-          printf("   ");
-        }
-      }
-      printf("\n");
-    }
-
     string_t text;
     if (source.length) {
       text = string_pushf("%.*s %.*s, %.*s", STRING_FMT(operand_names[operand]), STRING_FMT(dest), STRING_FMT(source));
@@ -580,8 +558,9 @@ int main(int argc, char** argv) {
     }
 
     cmd_t *cmd = PUSH_ARRAY(cmd_t, 1);
-    cmd->ip = ip;
-    cmd->text = text;
+    cmd->start = instruction_stream_start;
+    cmd->end   = instruction_stream.data;
+    cmd->text  = text;
 
     if (last_cmd) {
       cmd->prev = last_cmd;
@@ -593,21 +572,42 @@ int main(int argc, char** argv) {
     last_cmd = cmd;
   }
 
+  // Print the stuff
+
+  printf("; %s  %zd bytes\n", filename, (size_t)(global_memory - global_memory_base));
+  printf("\n");
+  if (!print_bytes) {
+    printf("bits 16");
+    printf("\n");
+  }
+
+
   cmd_t *cmd = last_cmd->first;
   while (cmd != NULL) {
+    size_t ip = cmd->start - start;
     for (size_t label_index = 0; label_index < label_count; label_index += 1) {
       label_t label = labels[label_index];
-      if (label.ip == cmd->ip) {
+      if (label.ip == ip) {
         printf("%.*s:\n", STRING_FMT(label.label));
         break;
+      }
+    }
+
+    if (print_bytes) {
+      size_t len = cmd->end - cmd->start;
+      printf("0x%03x  ", (uint32_t)ip);
+      for (size_t i = 0; i < 6; i += 1) {
+        if (i < len) {
+          printf("%02x ", *(cmd->start + i));
+        } else {
+          printf("   ");
+        }
       }
     }
 
     printf("%.*s\n", STRING_FMT(cmd->text));
     cmd = cmd->next;
   }
-
-  printf("; Used %zd bytes\n", (size_t)(global_memory - global_memory_base));
 
   return 0;
 }
