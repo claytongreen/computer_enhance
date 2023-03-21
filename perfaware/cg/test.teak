@@ -46,7 +46,11 @@ bool Test(str exe, str path, str file) {
     return false;
   }
   if !SystemShellExecute("nasm -o build\\out_asm build\\out.asm") {
-    SystemShellExecute("type out.asm");
+		if PathExists("out.asm") {
+    	SystemShellExecute("type out.asm");
+		} else {
+			SystemShellExecute("%exe% %path%\\%file% 1");
+		}
 
     return false;
   }
