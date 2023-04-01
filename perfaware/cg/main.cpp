@@ -15,6 +15,8 @@ typedef int16_t  s16;
 typedef uint32_t u32;
 typedef int32_t  s32;
 
+typedef int32_t  b32;
+
 // MEMORY ---------------------------------------------------------------------
 static size_t global_memory_size = 4096 * 8;
 static u8* global_memory_base;
@@ -776,6 +778,130 @@ static string_t instruction_print(decoder_t *decoder, instruction_t instruction)
   return result;
 }
 
+static u16 registers[8];
+
+static void register_set(register_t reg, s16 value) {
+  switch (reg) {
+  case REGISTER_AL: registers[0] &= value & 0xFF; break;
+  case REGISTER_AH: registers[0] &= ((value & 0xFF) << 8); break;
+  case REGISTER_AX: registers[0]  = value; break;
+
+  case REGISTER_BL: registers[1] &= value & 0xFF; break;
+  case REGISTER_BH: registers[1] &= ((value & 0xFF) << 8); break;
+  case REGISTER_BX: registers[1]  = value; break;
+
+  case REGISTER_CL: registers[2] &= value & 0xFF; break;
+  case REGISTER_CH: registers[2] &= ((value & 0xFF) << 8); break;
+  case REGISTER_CX: registers[2]  = value; break;
+
+  case REGISTER_DL: registers[3] &= value & 0xFF; break;
+  case REGISTER_DH: registers[3] &= ((value & 0xFF) << 8); break;
+  case REGISTER_DX: registers[3]  = value; break;
+
+  case REGISTER_SP: registers[4]  = value; break;
+  case REGISTER_BP: registers[5]  = value; break;
+  case REGISTER_SI: registers[6]  = value; break;
+  case REGISTER_DI: registers[7]  = value; break;
+
+  case REGISTER_CS:
+  case REGISTER_DS:
+  case REGISTER_NONE:
+  case REGISTER_COUNT:
+    // TODO: no bueno
+    break;
+  }
+}
+
+static s16 register_get(register_t reg) {
+  s16 result = 0;
+
+  switch (reg) {
+  case REGISTER_AL: result = registers[0] & 0xFF; break;
+  case REGISTER_AH: result = registers[0] & 0xFF00; break;
+  case REGISTER_AX: result = registers[0]; break;
+
+  case REGISTER_BL: result = registers[1] & 0xFF; break;
+  case REGISTER_BH: result = registers[1] & 0xFF00; break;
+  case REGISTER_BX: result = registers[1]; break;
+
+  case REGISTER_CL: result = registers[2] & 0xFF; break;
+  case REGISTER_CH: result = registers[2] & 0xFF00; break;
+  case REGISTER_CX: result = registers[2]; break;
+
+  case REGISTER_DL: result = registers[3] & 0xFF; break;
+  case REGISTER_DH: result = registers[3] & 0xFF00; break;
+  case REGISTER_DX: result = registers[3]; break;
+
+  case REGISTER_SP: result = registers[4]; break;
+  case REGISTER_BP: result = registers[5]; break;
+  case REGISTER_SI: result = registers[6]; break;
+  case REGISTER_DI: result = registers[7]; break;
+
+  case REGISTER_CS:
+  case REGISTER_DS:
+  case REGISTER_NONE:
+  case REGISTER_COUNT:
+    break;
+  }
+
+  return result;
+}
+
+static string_t instruction_simulate(decoder_t *decoder, instruction_t instruction) {
+  string_list_t sb = {};
+
+  string_list_push(&sb, instruction_print(decoder, instruction));
+
+  switch (instruction.opcode) {
+  case OP_CODE_MOV: {
+      if (instruction.dest.kind == OPERAND_KIND_REGISTER && instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
+        register_t reg = instruction.dest.reg;
+        s16 before = register_get(reg);
+        s16 after = instruction.source.immediate;
+        register_set(reg, after);
+        string_list_pushf(&sb, " ; %.*s:0x%d->0x%d", STRING_FMT(register_names[reg]), before, after);
+      } else {
+        decoder->error = STRING_LIT("ERROR: simulate: Unhandled MOV");
+      }
+  } break;
+
+  case OP_CODE_NONE:
+  case OP_CODE_ADD:
+  case OP_CODE_CMP:
+  case OP_CODE_DEC:
+  case OP_CODE_INC:
+  case OP_CODE_JA:
+  case OP_CODE_JB:
+  case OP_CODE_JBE:
+  case OP_CODE_JCXZ:
+  case OP_CODE_JE:
+  case OP_CODE_JG:
+  case OP_CODE_JL:
+  case OP_CODE_JLE:
+  case OP_CODE_JNB:
+  case OP_CODE_JNL:
+  case OP_CODE_JNO:
+  case OP_CODE_JNP:
+  case OP_CODE_JNS:
+  case OP_CODE_JNZ:
+  case OP_CODE_JO:
+  case OP_CODE_JP:
+  case OP_CODE_JS:
+  case OP_CODE_LOOP:
+  case OP_CODE_LOOPNZ:
+  case OP_CODE_LOOPZ:
+  case OP_CODE_XCHG:
+  case OP_CODE_POP:
+  case OP_CODE_PUSH:
+  case OP_CODE_SUB:
+  case OP_CODE_COUNT: {
+      decoder->error = string_pushf("ERROR: simulate: unhandled opcode: %.*s", op_code_names[instruction.opcode]);
+  } break;
+  }
+
+  return string_list_join(&sb);
+}
+
 int main(int argc, char** argv) {
   if (argc == 1) {
     fprintf(stderr, "Usage: sim[filename]\n");
@@ -783,6 +909,7 @@ int main(int argc, char** argv) {
   }
 
   int print_bytes = argc > 2;
+  b32 simulate = print_bytes;
 
   global_memory_base = (u8 *)malloc(global_memory_size);
   assert(global_memory_base && "Failed to allocate data");
@@ -822,6 +949,8 @@ int main(int argc, char** argv) {
     string_t text;
     if (decoder.error.length) {
       text = string_pushf("??? ; %.*s", STRING_FMT(decoder.error));
+    } else if (simulate) {
+      text = instruction_simulate(&decoder, instruction);
     } else {
       text = instruction_print(&decoder, instruction);
     }
@@ -846,38 +975,57 @@ int main(int argc, char** argv) {
 
   // Print the stuff
 
-  printf("; %s  %zd bytes\n", filename, (size_t)(global_memory - global_memory_base));
-  printf("\n");
-  if (!print_bytes) {
-    printf("bits 16");
+  if (simulate) {
+    printf("--- test\\%s execution ---\n", filename);
+  } else {
+    printf("; %s  %zd bytes\n", filename, (size_t)(global_memory - global_memory_base));
     printf("\n");
+    if (!print_bytes) {
+      printf("bits 16");
+      printf("\n");
+    }
   }
 
   cmd_t *cmd = last_cmd->first;
   while (cmd != NULL) {
-    size_t ip = cmd->start - decoder.start;
-    for (size_t label_index = 0; label_index < decoder.label_count; label_index += 1) {
-      label_t label = decoder.labels[label_index];
-      if (label.ip == ip) {
-        printf("%.*s:\n", STRING_FMT(label.label));
-        break;
+    if (!simulate) {
+      size_t ip = cmd->start - decoder.start;
+      for (size_t label_index = 0; label_index < decoder.label_count; label_index += 1) {
+        label_t label = decoder.labels[label_index];
+        if (label.ip == ip) {
+          printf("%.*s:\n", STRING_FMT(label.label));
+          break;
+        }
       }
-    }
 
-    if (print_bytes) {
-      size_t len = cmd->end - cmd->start;
-      printf("0x%03x  ", (uint32_t)ip);
-      for (size_t i = 0; i < 6; i += 1) {
-        if (i < len) {
-          printf("%02x ", *(cmd->start + i));
-        } else {
-          printf("   ");
+      if (!simulate) {
+        size_t len = cmd->end - cmd->start;
+        printf("0x%03x  ", (uint32_t)ip);
+        for (size_t i = 0; i < 6; i += 1) {
+          if (i < len) {
+            printf("%02x ", *(cmd->start + i));
+          } else {
+            printf("   ");
+          }
         }
       }
     }
 
     printf("%.*s\n", STRING_FMT(cmd->text));
     cmd = cmd->next;
+  }
+
+  if (simulate) {
+    printf("\nFinal registers:\n");
+    printf("      ax: 0x%04d (%d)\n", register_get(REGISTER_AX), register_get(REGISTER_AX));
+    printf("      bx: 0x%04d (%d)\n", register_get(REGISTER_BX), register_get(REGISTER_BX));
+    printf("      cx: 0x%04d (%d)\n", register_get(REGISTER_CX), register_get(REGISTER_CX));
+    printf("      dx: 0x%04d (%d)\n", register_get(REGISTER_DX), register_get(REGISTER_DX));
+    printf("      sp: 0x%04d (%d)\n", register_get(REGISTER_SP), register_get(REGISTER_SP));
+    printf("      bp: 0x%04d (%d)\n", register_get(REGISTER_BP), register_get(REGISTER_BP));
+    printf("      si: 0x%04d (%d)\n", register_get(REGISTER_SI), register_get(REGISTER_SI));
+    printf("      di: 0x%04d (%d)\n", register_get(REGISTER_DI), register_get(REGISTER_DI));
+    printf("\n");
   }
 
   return decoder.error.length;
