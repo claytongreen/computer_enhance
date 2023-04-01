@@ -8,10 +8,17 @@
 
 #define assert(Cond) do { if (!(Cond)) __debugbreak(); } while (0)
 
+typedef uint8_t   u8;
+typedef int8_t    s8;
+typedef uint16_t u16;
+typedef int16_t  s16;
+typedef uint32_t u32;
+typedef int32_t  s32;
+
 // MEMORY ---------------------------------------------------------------------
 static size_t global_memory_size = 4096 * 8;
-static uint8_t* global_memory_base;
-static uint8_t* global_memory;
+static u8* global_memory_base;
+static u8* global_memory;
 #define PUSH_ARRAY(TYPE, COUNT) (TYPE *)global_memory;                                            \
   memset(global_memory, 0, sizeof(TYPE) * (COUNT));                                               \
   global_memory += sizeof(TYPE) * (COUNT);                                                        \
@@ -41,49 +48,65 @@ static string_t read_entire_file(char* filename) {
 
 // PROGRAM --------------------------------------------------------------------
 
-static string_t empty_str = STRING_LIT("");
-static string_t none_str = STRING_LIT("none");
-// TODO: remove
-static string_t unknown_str = STRING_LIT("???");     
-
-enum operand_t {
-  OPERAND_NONE,
-  // ------------------
-  OPERAND_ADD,
-  OPERAND_CMP,
-  OPERAND_DEC,
-  OPERAND_INC,
-  OPERAND_JA,
-  OPERAND_JB,
-  OPERAND_JBE,
-  OPERAND_JCXZ,
-  OPERAND_JE,
-  OPERAND_JG,
-  OPERAND_JL,
-  OPERAND_JLE,
-  OPERAND_JNB,
-  OPERAND_JNL,
-  OPERAND_JNO,
-  OPERAND_JNP,
-  OPERAND_JNS,
-  OPERAND_JNZ,
-  OPERAND_JO,
-  OPERAND_JP,
-  OPERAND_JS,
-  OPERAND_LOOP,
-  OPERAND_LOOPNZ,
-  OPERAND_LOOPZ,
-  OPERAND_MOV,
-  OPERAND_XCHG,
-  OPERAND_POP,
-  OPERAND_PUSH,
-  OPERAND_SUB,
-  // ---------------------
-  OPERAND_COUNT,
+struct label_t {
+  size_t ip;
+  string_t label;
 };
 
-static string_t operand_names[OPERAND_COUNT] = {
-  none_str,
+#define LABEL_COUNT_MAX 4
+struct decoder_t {
+  string_t instruction_stream;
+  string_t error;
+
+  u8 *start;
+
+  label_t labels[LABEL_COUNT_MAX];
+  u32 label_count;
+};
+
+static string_t str_empty = STRING_LIT("");
+static string_t str_none = STRING_LIT("none");
+// TODO: remove
+static string_t str_unknown = STRING_LIT("???");     
+
+enum op_code_t {
+  OP_CODE_NONE,
+  // ------------------
+  OP_CODE_ADD,
+  OP_CODE_CMP,
+  OP_CODE_DEC,
+  OP_CODE_INC,
+  OP_CODE_JA,
+  OP_CODE_JB,
+  OP_CODE_JBE,
+  OP_CODE_JCXZ,
+  OP_CODE_JE,
+  OP_CODE_JG,
+  OP_CODE_JL,
+  OP_CODE_JLE,
+  OP_CODE_JNB,
+  OP_CODE_JNL,
+  OP_CODE_JNO,
+  OP_CODE_JNP,
+  OP_CODE_JNS,
+  OP_CODE_JNZ,
+  OP_CODE_JO,
+  OP_CODE_JP,
+  OP_CODE_JS,
+  OP_CODE_LOOP,
+  OP_CODE_LOOPNZ,
+  OP_CODE_LOOPZ,
+  OP_CODE_MOV,
+  OP_CODE_XCHG,
+  OP_CODE_POP,
+  OP_CODE_PUSH,
+  OP_CODE_SUB,
+  // ---------------------
+  OP_CODE_COUNT,
+};
+
+static string_t op_code_names[OP_CODE_COUNT] = {
+  str_none,
   STRING_LIT("add"),
   STRING_LIT("cmp"),
   STRING_LIT("dec"),
@@ -115,7 +138,7 @@ static string_t operand_names[OPERAND_COUNT] = {
   STRING_LIT("sub"),
 };
 
-enum register_t {
+enum register_t : u8 {
   REGISTER_NONE,
   // --------------
   REGISTER_AL,
@@ -141,7 +164,7 @@ enum register_t {
 };
 
 static string_t register_names[REGISTER_COUNT] = {
-  none_str,
+  str_none,
   STRING_LIT("al"),
   STRING_LIT("cl"),
   STRING_LIT("dl"),
@@ -162,83 +185,594 @@ static string_t register_names[REGISTER_COUNT] = {
   STRING_LIT("ds"),
 };
 
-enum effective_address_t {
-  EFFECTIVE_ADDRESS_DIRECT,
-  EFFECTIVE_ADDRESS_BX_SI,
-  EFFECTIVE_ADDRESS_BX_DI,
-  EFFECTIVE_ADDRESS_BP_SI,
-  EFFECTIVE_ADDRESS_BP_DI,
-  EFFECTIVE_ADDRESS_SI,
-  EFFECTIVE_ADDRESS_DI,
-  EFFECTIVE_ADDRESS_BP,
-  EFFECTIVE_ADDRESS_BX,
-  // --------------
-  EFFECTIVE_ADDRESS_COUNT,
+// @TODO: better name
+struct address_t {
+  register_t registers[2];
+  u8 register_count;
+  // @TODO: offset8 and offset16, or just a single 16 bit offset?
+  s16 offset;
 };
 
-static string_t address_names[EFFECTIVE_ADDRESS_COUNT] = {
-  empty_str,
-  STRING_LIT("bx + si"),
-  STRING_LIT("bx + di"),
-  STRING_LIT("bp + si"),
-  STRING_LIT("bp + di"),
-  register_names[REGISTER_SI],
-  register_names[REGISTER_DI],
-  register_names[REGISTER_BP],
-  register_names[REGISTER_BX],
+enum instruction_flag_t {
+  INSTRUCTION_FLAG_DEST = 1 << 0,
+  INSTRUCTION_FLAG_WIDE = 1 << 1,
 };
 
+enum operand_kind_t {
+  OPERAND_KIND_NONE,
+  OPERAND_KIND_REGISTER,
+  OPERAND_KIND_ADDRESS,
+  OPERAND_KIND_IMMEDIATE,
+  OPERAND_KIND_IMMEDIATE8,
+  OPERAND_KIND_IMMEDIATE16,
+  OPERAND_KIND_LABEL,
+};
 
-static string_t get_register_name(uint8_t reg, uint8_t w) {
-  return register_names[(w * 8) + (reg + 1)];
+struct operand_t {
+  operand_kind_t kind;
+
+  union {
+    u16 immediate;
+    register_t reg;
+    address_t address;
+    u8 label_index;
+  };
+};
+
+#define INSTRUCTION_MAX_BYTE_COUNT 6
+struct instruction_t {
+  op_code_t opcode;
+
+  u8 *ip;
+  u8  bytes_count;
+
+  operand_t dest;
+  operand_t source;
+
+  u8 flags; // ???
+};
+
+static register_t get_register(u8 reg, u8 w) {
+  register_t result = (register_t)((w * 8) + (reg + 1));
+  return result;
 }
 
-static uint8_t next_byte(string_t* instruction_stream) {
+static string_t get_register_name(u8 reg, u8 w) {
+  register_t r = get_register(reg, w);
+  return register_names[r];
+}
+
+static u8 next_byte(string_t* instruction_stream) {
   assert(instruction_stream->length > 0 && "Unexpected end of instruction stream");
 
-  uint8_t byte = *(instruction_stream->data);
+  u8 byte = *(instruction_stream->data);
   instruction_stream->data   += 1;
   instruction_stream->length -= 1;
 
   return byte;
 }
 
-static int16_t next_data_s16(string_t *instruction_stream) {
-  uint8_t data = (int16_t)next_byte(instruction_stream);
+static s16 next_data_s16(string_t *instruction_stream) {
+  u8 data = (s16)next_byte(instruction_stream);
   return data;
 }
 
-static uint16_t next_data_u16(string_t* instruction_stream, uint8_t w) {
-  uint8_t lo = next_byte(instruction_stream);
-  uint8_t hi = (w == 1) ? next_byte(instruction_stream) : ((lo & 0x80) ? 0xff : 0);
+static u16 next_data_u16(string_t* instruction_stream, u8 w) {
+  u8 lo = next_byte(instruction_stream);
+  u8 hi = (w == 1) ? next_byte(instruction_stream) : ((lo & 0x80) ? 0xff : 0);
 
-  uint16_t data = (((int16_t)hi) << 8) | (uint16_t)lo;
+  u16 data = (((s16)hi) << 8) | (u16)lo;
 
   return data;
 }
 
-static string_t next_effective_address(string_t *instruction_stream, uint8_t mod, uint8_t rm) {
-  string_t result;
+static register_t effective_address_one[8] = { REGISTER_BX, REGISTER_BX, REGISTER_BP, REGISTER_BP, REGISTER_SI,   REGISTER_DI,   REGISTER_BP,   REGISTER_BX };
+static register_t effective_address_two[8] = { REGISTER_SI, REGISTER_DI, REGISTER_SI, REGISTER_DI, REGISTER_NONE, REGISTER_NONE, REGISTER_NONE, REGISTER_NONE };
+static operand_t next_address(string_t *instruction_stream, u8 w, u8 mod, u8 rm) {
+  operand_t result = {};
 
-  if (mod == 0 && rm == 6) {
-    uint16_t data = next_data_u16(instruction_stream, 1);
-    result = string_pushf("[%d]", data);
+  if (mod == 3) {
+    result.kind = OPERAND_KIND_REGISTER;
+    result.reg = get_register(rm, w);
+  } else if (mod == 0 && rm == 6) {
+    // @TODO: next_data_s16?
+    result.kind = OPERAND_KIND_ADDRESS;
+    result.address.offset = next_data_u16(instruction_stream, 1);
   } else {
-    uint16_t data = mod ? next_data_u16(instruction_stream, mod == 2 ? 1 : 0) : 0;
-    // only print if offset isn't 0
-    if (data) {
-      // TODO: is there a better way to print +/-
-      result = string_pushf("[%.*s %s %d]", STRING_FMT(address_names[rm + 1]), data < 0 ? "-" : "+", data < 0 ? (data * -1) : data);
-    } else {
-      result = string_pushf("[%.*s]", STRING_FMT(address_names[rm + 1]));
+    result.kind = OPERAND_KIND_ADDRESS;
+    result.address.registers[0]   = effective_address_one[rm];
+    result.address.registers[1]   = effective_address_two[rm];
+    result.address.register_count = 2;
+    if (mod) {
+      // @TODO: next_data_s16?
+      result.address.offset = next_data_u16(instruction_stream, mod == 2 ? 1 : 0);
     }
   }
 
   return result;
 }
 
-static string_t next_register_memory(string_t *instruction_stream, uint8_t w, uint8_t mod, uint8_t rm) {
-  string_t result = (mod == 3) ? get_register_name(rm, w) : next_effective_address(instruction_stream, mod, rm);
+static instruction_t instruction_decode(decoder_t *decoder, size_t offset) {
+  instruction_t result = {};
+
+  string_t *instruction_stream = &decoder->instruction_stream;
+
+  u8 b1 = next_byte(instruction_stream);
+
+  switch (b1) {
+    case 0x00: // ADD b,f,r/m
+    case 0x01: // ADD w,f,r/m
+    case 0x02: // ADD b,t,r/m
+    case 0x03: // ADD w,t,r/m
+    case 0x28: // SUB b,f,r/m
+    case 0x29: // SUB w,f,r/m
+    case 0x2A: // SUB b,t,r/m
+    case 0x2B: // SUB w,t,r/m
+    case 0x38: // CMP b,f,r/m
+    case 0x39: // CMP w,f,r/m
+    case 0x3A: // CMP b,t,r/m
+    case 0x3B: // CMP w,t,r/m
+    case 0x88: // MOV b,f,r/m
+    case 0x89: // MOV w,f,r/m
+    case 0x8A: // MOV b,t,r/m
+    case 0x8B: // MOV w,t,r/m
+    {
+      u8 d = (b1 >> 1) & 1;
+      u8 w = (b1 >> 0) & 1;
+
+      u8 b2 = next_byte(instruction_stream);
+      u8 mod = (b2 >> 6);
+      u8 reg = (b2 >> 3) & 7;
+      u8 rm  = (b2 >> 0) & 7;
+
+      operand_t op_address = next_address(instruction_stream, w, mod, rm);
+
+      switch (b1) {
+        case 0x00:
+        case 0x01:
+        case 0x02:
+        case 0x03: result.opcode = OP_CODE_ADD; break;
+
+        case 0x28:
+        case 0x29:
+        case 0x2A:
+        case 0x2B: result.opcode = OP_CODE_SUB; break;
+
+        case 0x38:
+        case 0x39:
+        case 0x3A:
+        case 0x3B: result.opcode = OP_CODE_CMP; break;
+
+        case 0x88:
+        case 0x89:
+        case 0x8A:
+        case 0x8B: result.opcode = OP_CODE_MOV; break;
+
+        default: 
+          decoder->error = string_pushf("\n!!! Unexpected opcode 0x%x\n", b1);
+          break;
+      }
+
+      operand_t op_register = { OPERAND_KIND_REGISTER };
+      op_register.reg = get_register(reg, w);
+
+      result.dest   = d ? op_register : op_address;
+      result.source = d ? op_address : op_register;
+    } break;
+
+    case 0x04: // ADD b,ia
+    case 0x05: // ADD w,ia
+    case 0x2C: // SUB b,ia
+    case 0x2D: // SUB w,ia
+    case 0x3C: // CMP b,ia
+    case 0x3D: // CMP w,ia
+    {
+      u8 w = (b1 >> 0) & 1;
+
+      u16 data = next_data_u16(instruction_stream, w);
+
+      switch (b1) {
+        case 0x04:
+        case 0x05: result.opcode = OP_CODE_ADD; break;
+
+        case 0x2C:
+        case 0x2D: result.opcode = OP_CODE_SUB; break;
+
+        case 0x3C:
+        case 0x3D: result.opcode = OP_CODE_CMP; break;
+
+        default: 
+          decoder->error = string_pushf("\n!!! Unexpected opcode 0x%02x\n", b1);
+          break;
+      }
+      operand_t dest = { OPERAND_KIND_REGISTER };
+      switch (b1) {
+        case 0x04:
+        case 0x2C:
+        case 0x3C: dest.reg = REGISTER_AL; break;
+
+        case 0x05:
+        case 0x2D:
+        case 0x3D: dest.reg = REGISTER_AX; break;
+
+        default: 
+          decoder->error = string_pushf("\n!!! Unexpected dest 0x%02x\n", b1);
+          break;
+      }
+
+      operand_t source = { OPERAND_KIND_IMMEDIATE };
+      source.immediate = data;
+
+      result.dest = dest;
+      result.source = source;
+    } break;
+
+    case 0x0E: // PUSH CS
+    {
+      result.opcode = OP_CODE_PUSH;
+      result.dest.kind = OPERAND_KIND_REGISTER;
+      result.dest.reg = REGISTER_CS;
+    } break;
+
+    case 0x50: // PUSH AX
+    case 0x51: // PUSH CX
+    case 0x52: // PUSH DX
+    case 0x53: // PUSH BX
+    case 0x54: // PUSH SP
+    case 0x55: // PUSH BP
+    case 0x56: // PUSH SI
+    case 0x57: // PUSH DI
+    {
+      register_t reg = (register_t)((s32)REGISTER_AX + (b1 - 0x50));
+
+      result.opcode = OP_CODE_PUSH;
+      result.dest.kind = OPERAND_KIND_REGISTER;
+      result.dest.reg = reg;
+    } break;
+
+    case 0x1E: // PUSH DS
+    {
+      result.opcode = OP_CODE_PUSH;
+      result.dest.kind = OPERAND_KIND_REGISTER;
+      result.dest.reg = REGISTER_DS;
+    } break;
+
+    case 0x1F: // POP DS
+    {
+      result.opcode = OP_CODE_POP;
+      result.dest.kind = OPERAND_KIND_REGISTER;
+      result.dest.reg = REGISTER_DS;
+    } break;
+
+    case 0x58: // POP AX
+    case 0x59: // POP CX
+    case 0x5A: // POP DX
+    case 0x5B: // POP BX
+    case 0x5C: // POP SP
+    case 0x5D: // POP BP
+    case 0x5E: // POP SI
+    case 0x5F: // POP DI
+    {
+      register_t reg = (register_t)((int)REGISTER_AX + (b1 - 0x58));
+
+      result.opcode = OP_CODE_POP;
+      result.dest.kind = OPERAND_KIND_REGISTER;
+      result.dest.reg = reg;
+    } break;
+
+    case 0x8F: // POP r/m
+    {
+      u8 b2 = next_byte(instruction_stream);
+      u8 mod = (b2 >> 6);
+      // u8 reg = (b2 >> 3) & 7;
+      u8 rm  = (b2 >> 0) & 7;
+
+      operand_t address = next_address(instruction_stream, 0, mod, rm);
+
+      result.opcode = OP_CODE_POP;
+      result.dest = address; // TODO: WORD?
+    } break;
+
+    case 0x87: // XCHG w,r/m
+    {
+      u8 w = (b1 >> 0) & 1;
+
+      u8 b2 = next_byte(instruction_stream);
+      u8 mod = (b2 >> 6);
+      u8 reg = (b2 >> 3) & 7;
+      u8 rm  = (b2 >> 0) & 7;
+
+      operand_t address = next_address(instruction_stream, w, mod, rm);
+
+      result.opcode = OP_CODE_XCHG;
+      result.dest.kind = OPERAND_KIND_REGISTER;
+      result.dest.reg = get_register(reg, w);
+      result.source = address;
+    } break;
+
+    case 0x70: // JO
+    case 0x71: // JNO
+    case 0x72: // JB/JNAE
+    case 0x73: // JNB/JAE
+    case 0x74: // JE/JZ
+    case 0x76: // JBE/JNA
+    case 0x75: // JNE/JNZ
+    case 0x77: // JNBE/JA
+    case 0x78: // JS
+    case 0x79: // JNS
+    case 0x7A: // JP/JPE
+    case 0x7B: // JNP/JPO
+    case 0x7C: // JL/JNGE
+    case 0x7D: // JNL/JGE
+    case 0x7E: // JLE/JNG
+    case 0x7F: // JNLE/JG
+    case 0xE0: // LOOPNZ/LOOPNE
+    case 0xE1: // LOOPZ/LOOPE
+    case 0xE2: // LOOP
+    case 0xE3: // JCXZ
+    {
+      s8 inc = (s8)next_byte(instruction_stream);
+
+      s8 label_index = -1;
+
+      size_t label_ip = (instruction_stream->data - decoder->start) + inc;
+      if (decoder->label_count < LABEL_COUNT_MAX) { // have space for more labels
+        // look for existing label
+        for (size_t i = 0; i < decoder->label_count; i += 1) {
+          if (decoder->labels[i].ip == label_ip) {
+            label_index = i;
+            break;
+          }
+        }
+
+        if (label_index == -1) {
+          string_t label = string_pushf("label%d", label_ip);
+          label_index = decoder->label_count++;
+          decoder->labels[label_index] = { label_ip, label };
+        }
+      } else {
+        decoder->error = STRING_LIT("Too many labels");
+      }
+
+      // TODO: Is there a nice way to map this?
+      switch(b1) {
+        case 0x70: result.opcode = OP_CODE_JO;     break;
+        case 0x71: result.opcode = OP_CODE_JNO;    break;
+        case 0x72: result.opcode = OP_CODE_JB;     break;
+        case 0x73: result.opcode = OP_CODE_JNB;    break;
+        case 0x74: result.opcode = OP_CODE_JE;     break;
+        case 0x75: result.opcode = OP_CODE_JNZ;    break;
+        case 0x76: result.opcode = OP_CODE_JBE;    break;
+        case 0x77: result.opcode = OP_CODE_JA;     break;
+        case 0x78: result.opcode = OP_CODE_JS;     break;
+        case 0x79: result.opcode = OP_CODE_JNS;    break;
+        case 0x7A: result.opcode = OP_CODE_JP;     break;
+        case 0x7B: result.opcode = OP_CODE_JNP;    break;
+        case 0x7C: result.opcode = OP_CODE_JL;     break;
+        case 0x7D: result.opcode = OP_CODE_JNL;    break;
+        case 0x7E: result.opcode = OP_CODE_JLE;    break;
+        case 0x7F: result.opcode = OP_CODE_JG;     break;
+        case 0xE0: result.opcode = OP_CODE_LOOPNZ; break;
+        case 0xE1: result.opcode = OP_CODE_LOOPZ;  break;
+        case 0xE2: result.opcode = OP_CODE_LOOP;   break;
+        case 0xE3: result.opcode = OP_CODE_JCXZ;   break;
+
+        default:
+          decoder->error = string_pushf("\n!!! Unexpected opcode 0x%02x\n", b1);
+          break;
+      }
+
+      result.dest.kind = OPERAND_KIND_LABEL;
+      result.dest.label_index = label_index;
+    } break;
+
+    case 0x80: // Immed b,r/m
+    case 0x81: // Immed w,r/m
+    case 0x82: // Immed b,r/m
+    case 0x83: // Immed is,r/m
+    {
+      u8 w = (b1 >> 0) & 1;
+
+      u8 b2 = next_byte(instruction_stream);
+      u8 mod = (b2 >> 6);
+      u8 op  = (b2 >> 3) & 7;
+      u8 rm  = (b2 >> 0) & 7;
+
+      operand_t dest = next_address(instruction_stream, w, mod, rm);
+
+      u16 data = b1 == 0x83 ? next_data_s16(instruction_stream) : next_data_u16(instruction_stream, w);
+
+      switch (op) {
+        case 0:  result.opcode = OP_CODE_ADD; break;
+        case 1: decoder->error = STRING_LIT("Invalid op: 1"); break;
+        case 2: decoder->error = STRING_LIT("TODO: adc");     break;
+        case 3: decoder->error = STRING_LIT("TODO: sbb");     break;
+        case 4: decoder->error = STRING_LIT("Invalid op: 4"); break;
+        case 5:  result.opcode = OP_CODE_SUB; break;
+        case 6: decoder->error = STRING_LIT("Invalid op: 6"); break;
+        case 7:  result.opcode = OP_CODE_CMP; break;
+      }
+
+      result.source.kind = (mod == 3) ? OPERAND_KIND_IMMEDIATE : (w ? OPERAND_KIND_IMMEDIATE16 : OPERAND_KIND_IMMEDIATE8);
+      result.source.immediate = data;
+
+      result.dest = dest;
+
+    } break;
+
+    case 0xA0: // MOV m -> AL
+    case 0xA1: // MOV m -> AX
+    case 0xA2: // MOV AX -> m
+    case 0xA3: // MOV AX -> m
+    {
+      u8 d = (b1 >> 1) & 1;
+      u8 w = (b1 >> 0) & 1;
+
+      operand_t op_addr = next_address(instruction_stream, 0, 0, 6);
+
+      operand_t op_reg = { OPERAND_KIND_REGISTER };
+      op_reg.reg = w ? REGISTER_AX : REGISTER_AL;
+
+      result.opcode = OP_CODE_MOV;
+      result.dest   = d ? op_addr : op_reg;
+      result.source = d ? op_reg : op_addr;
+    } break;
+
+    case 0xB0: // MOV i -> AL
+    case 0xB1: // MOV i -> CL
+    case 0xB2: // MOV i -> DL
+    case 0xB3: // MOV i -> BL
+    case 0xB4: // MOV i -> AH
+    case 0xB5: // MOV i -> CH
+    case 0xB6: // MOV i -> DH
+    case 0xB7: // MOV i -> BH
+    case 0xB8: // MOV i -> AX
+    case 0xB9: // MOV i -> CX
+    case 0xBA: // MOV i -> DX
+    case 0xBB: // MOV i -> BX
+    case 0xBC: // MOV i -> SP
+    case 0xBD: // MOV i -> BP
+    case 0xBE: // MOV i -> SI
+    case 0xBF: // MOV i -> DI
+    {
+      u8 w = b1 >= 0xB8; // TODO: does this "scale" (i.e. work for all values? probably not)
+
+      u16 data = next_data_u16(instruction_stream, w);
+
+      operand_t dest = { OPERAND_KIND_REGISTER };
+      dest.reg = (register_t)(b1 - 0xB0 + 1);
+
+      operand_t source = { OPERAND_KIND_IMMEDIATE };
+      source.immediate = data;
+
+      result.opcode =  OP_CODE_MOV;
+      result.dest = dest;
+      result.source = source;
+    } break;
+
+    case 0xC6: // MOV b,i,r/m
+    case 0xC7: // MOV w,i,r/m
+    {
+      u8 w = (b1 >> 0) & 1;
+
+      u8 b2 = next_byte(instruction_stream);
+      u8 mod = (b2 >> 6);
+      // TODO: op?
+      u8 rm  = (b2 >> 0) & 7;
+
+      operand_t op_addr = next_address(instruction_stream, w, mod, rm);
+      u16 data     = next_data_u16(instruction_stream, w);
+
+      result.opcode = OP_CODE_MOV;
+
+      result.dest   = op_addr;
+
+      result.source.kind = w ? OPERAND_KIND_IMMEDIATE16 : OPERAND_KIND_IMMEDIATE8;
+      result.source.immediate = data;
+
+    } break;
+
+    // INC, DEC, CALL id, CALL l id, JMP id, PUSH, -
+    case 0xFF: // Grp 2 w,r/m
+    {
+      u8 b2 = next_byte(instruction_stream);
+      u8 mod = (b2 >> 6);
+      u8 op  = (b2 >> 3) & 7;
+      u8 rm  = (b2 >> 0) & 7;
+
+      switch (op) {
+        case 6: // PUSH MEM16
+          result.opcode = OP_CODE_PUSH;
+
+          operand_t address = next_address(instruction_stream, 1, mod, rm);
+          result.dest = address;
+          break;
+
+        // case 0: break; // INC  MEM16
+        // case 1: break; // DEC  MEM16
+        // case 2: break; // CALL REG16/MEM16 (intra)
+        // case 3: break; // CALL MEM16 (intersegment)
+        // case 4: break; // JMP  REG16/MEM16 (intersegment)
+        // case 7: assert(false); break; // (not used)
+
+        default: 
+          decoder->error = string_pushf("Unexpected op: 0b%.*s", 3, &bit_string_u8(op)[6]);
+          break;
+      }
+    } break;
+
+    default:
+      decoder->error = string_pushf("Unexpected instruction 0b%s", bit_string_u8(b1));
+      break;
+  }
+
+  return result;
+}
+
+static string_t operand_print(decoder_t *decoder, operand_t operand) {
+  string_t result = { 0 };
+
+  switch (operand.kind) {
+    case OPERAND_KIND_IMMEDIATE: {
+      result = string_pushf("%d", operand.immediate);
+    } break;
+    case OPERAND_KIND_IMMEDIATE8: {
+      result = string_pushf("byte %d", operand.immediate);
+    } break;
+    case OPERAND_KIND_IMMEDIATE16: {
+      result = string_pushf("word %d", operand.immediate);
+    } break;
+    case OPERAND_KIND_REGISTER: {
+      result = register_names[operand.reg];
+    } break;
+    case OPERAND_KIND_ADDRESS: {
+      address_t addr = operand.address;
+
+      string_list_t sb = { 0 };
+      string_list_push(&sb, STRING_LIT("["));
+      if (addr.register_count > 0) {
+        string_t reg = register_names[addr.registers[0]];
+        string_list_push(&sb, reg);
+      }
+      if (addr.register_count > 1 && addr.registers[1] != REGISTER_NONE) {
+        string_t reg = register_names[addr.registers[1]];
+        string_list_pushf(&sb, " + %.*s", STRING_FMT(reg));
+      }
+      if (addr.offset) {
+        s16 offset = addr.offset >= 0 ? addr.offset : -addr.offset;
+        if (addr.register_count) {
+          string_list_pushf(&sb, " %s %d", addr.offset >= 0 ? "+" : "-", offset);
+        } else {
+          string_list_pushf(&sb, "%d", offset);
+        }
+      }
+      string_list_push(&sb, STRING_LIT("]"));
+      result = string_list_join(&sb);
+    } break;
+    case OPERAND_KIND_LABEL: {
+      label_t label = decoder->labels[operand.label_index];
+      result = string_pushf("%.*s ; %d", STRING_FMT(label.label), label.ip);
+    } break;
+
+    case OPERAND_KIND_NONE: break;
+  }
+
+  return result;
+}
+
+static string_t instruction_print(decoder_t *decoder, instruction_t instruction) {
+  string_t result;
+
+  string_t opcode = op_code_names[instruction.opcode];
+  string_t dest = operand_print(decoder, instruction.dest);
+
+  if (instruction.source.kind != OPERAND_KIND_NONE) {
+    string_t source = operand_print(decoder, instruction.source);
+    result = string_pushf("%.*s %.*s, %.*s", STRING_FMT(opcode), STRING_FMT(dest), STRING_FMT(source));
+  } else {
+    result = string_pushf("%.*s %.*s", STRING_FMT(opcode), STRING_FMT(dest));
+  }
+
   return result;
 }
 
@@ -248,18 +782,20 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  global_memory_base = (uint8_t *)malloc(global_memory_size);
+  int print_bytes = argc > 2;
+
+  global_memory_base = (u8 *)malloc(global_memory_size);
   assert(global_memory_base && "Failed to allocate data");
   memset(global_memory_base, 0, global_memory_size);
   global_memory = global_memory_base;
 
+  decoder_t decoder = { 0 };
+
   char* filename = argv[1];
-  string_t instruction_stream = read_entire_file(filename);
-  assert(instruction_stream.length != 0 && "Failed to read file");
+  decoder.instruction_stream = read_entire_file(filename);
+  assert(decoder.instruction_stream.length != 0 && "Failed to read file");
 
-  int print_bytes = argc > 2;
-
-  uint8_t *start = instruction_stream.data;
+  decoder.start = decoder.instruction_stream.data;
 
   struct cmd_t {
     cmd_t *first;
@@ -267,429 +803,33 @@ int main(int argc, char** argv) {
     cmd_t *next;
     cmd_t *prev;
 
-    uint8_t *start;
-    uint8_t *end;
+    u8 *start;
+    u8 *end;
     string_t text;
   };
 
-  struct label_t {
-    size_t ip;
-    string_t label;
-  };
-
-  label_t labels[4];
-  size_t label_count = 0;
-
-  string_t error = { 0 };
   cmd_t *last_cmd = NULL;
+
   for (;;) {
-    if (instruction_stream.length == 0) break;
+    if (decoder.instruction_stream.length == 0) break;
 
-    operand_t operand;
-    string_t dest = { 0 };
-    string_t source = { 0 };
+    u8 *instruction_stream_start = decoder.instruction_stream.data;
 
-    uint8_t* instruction_stream_start = instruction_stream.data;
+    instruction_t instruction = instruction_decode(&decoder, 0);
 
-    uint8_t b1 = next_byte(&instruction_stream);
-    switch (b1) {
-      case 0x00: // ADD b,f,r/m
-      case 0x01: // ADD w,f,r/m
-      case 0x02: // ADD b,t,r/m
-      case 0x03: // ADD w,t,r/m
-      case 0x28: // SUB b,f,r/m
-      case 0x29: // SUB w,f,r/m
-      case 0x2A: // SUB b,t,r/m
-      case 0x2B: // SUB w,t,r/m
-      case 0x38: // CMP b,f,r/m
-      case 0x39: // CMP w,f,r/m
-      case 0x3A: // CMP b,t,r/m
-      case 0x3B: // CMP w,t,r/m
-      case 0x88: // MOV b,f,r/m
-      case 0x89: // MOV w,f,r/m
-      case 0x8A: // MOV b,t,r/m
-      case 0x8B: // MOV w,t,r/m
-      {
-        uint8_t d = (b1 >> 1) & 1;
-        uint8_t w = (b1 >> 0) & 1;
-
-        uint8_t b2 = next_byte(&instruction_stream);
-        uint8_t mod = (b2 >> 6);
-        uint8_t reg = (b2 >> 3) & 7;
-        uint8_t rm  = (b2 >> 0) & 7;
-
-        string_t register_memory_name = next_register_memory(&instruction_stream, w, mod, rm);
-
-        switch (b1) {
-          case 0x00:
-          case 0x01:
-          case 0x02:
-          case 0x03: operand = OPERAND_ADD; break;
-
-          case 0x28:
-          case 0x29:
-          case 0x2A:
-          case 0x2B: operand = OPERAND_SUB; break;
-
-          case 0x38:
-          case 0x39:
-          case 0x3A:
-          case 0x3B: operand = OPERAND_CMP; break;
-
-          case 0x88:
-          case 0x89:
-          case 0x8A:
-          case 0x8B: operand = OPERAND_MOV; break;
-
-          default: 
-            error = string_pushf("\n!!! Unexpected operand 0x%x\n", b1);
-            break;
-        }
-
-        string_t register_name = get_register_name(reg, w);
-
-        dest    = d ? register_name : register_memory_name;
-        source  = d ? register_memory_name : register_name;
-      } break;
-
-      case 0x04: // ADD b,ia
-      case 0x05: // ADD w,ia
-      case 0x2C: // SUB b,ia
-      case 0x2D: // SUB w,ia
-      case 0x3C: // CMP b,ia
-      case 0x3D: // CMP w,ia
-      {
-        uint8_t w = (b1 >> 0) & 1;
-
-        uint16_t data = next_data_u16(&instruction_stream, w);
-
-        switch (b1) {
-          case 0x04:
-          case 0x05: operand = OPERAND_ADD; break;
-
-          case 0x2C:
-          case 0x2D: operand = OPERAND_SUB; break;
-
-          case 0x3C:
-          case 0x3D: operand = OPERAND_CMP; break;
-
-          default: 
-            error = string_pushf("\n!!! Unexpected operand 0x%02x\n", b1);
-            break;
-        }
-        switch (b1) {
-          case 0x04:
-          case 0x2C:
-          case 0x3C: dest = register_names[REGISTER_AL]; break;
-
-          case 0x05:
-          case 0x2D:
-          case 0x3D: dest = register_names[REGISTER_AX]; break;
-
-          default: 
-            error = string_pushf("\n!!! Unexpected dest 0x%02x\n", b1);
-            break;
-        }
-        source = string_pushf("%d", data);
-      } break;
-
-      case 0x0E: // PUSH CS
-      {
-        operand = OPERAND_PUSH;
-        dest = register_names[REGISTER_CS];
-      } break;
-
-      case 0x50: // PUSH AX
-      case 0x51: // PUSH CX
-      case 0x52: // PUSH DX
-      case 0x53: // PUSH BX
-      case 0x54: // PUSH SP
-      case 0x55: // PUSH BP
-      case 0x56: // PUSH SI
-      case 0x57: // PUSH DI
-      {
-        register_t reg = (register_t)((int)REGISTER_AX + (b1 - 0x50));
-
-        operand = OPERAND_PUSH;
-        dest = register_names[reg];
-      } break;
-
-      case 0x1E: // PUSH DS
-      {
-        operand = OPERAND_PUSH;
-        dest = register_names[REGISTER_DS];
-      } break;
-
-      case 0x1F: // POP DS
-      {
-        operand = OPERAND_POP;
-        dest = register_names[REGISTER_DS];
-      } break;
-
-      case 0x58: // POP AX
-      case 0x59: // POP CX
-      case 0x5A: // POP DX
-      case 0x5B: // POP BX
-      case 0x5C: // POP SP
-      case 0x5D: // POP BP
-      case 0x5E: // POP SI
-      case 0x5F: // POP DI
-      {
-        register_t reg = (register_t)((int)REGISTER_AX + (b1 - 0x58));
-
-        operand = OPERAND_POP;
-        dest = register_names[reg];
-      } break;
-
-      case 0x8F: // POP r/m
-      {
-        uint8_t b2 = next_byte(&instruction_stream);
-        uint8_t mod = (b2 >> 6);
-        // uint8_t reg = (b2 >> 3) & 7;
-        uint8_t rm  = (b2 >> 0) & 7;
-
-        string_t address = next_effective_address(&instruction_stream, mod, rm);
-
-        operand = OPERAND_POP;
-        dest = string_pushf("word %.*s", STRING_FMT(address));
-      } break;
-
-      case 0x87: // XCHG w,r/m
-      {
-        uint8_t w = (b1 >> 0) & 1;
-
-        uint8_t b2 = next_byte(&instruction_stream);
-        uint8_t mod = (b2 >> 6);
-        uint8_t reg = (b2 >> 3) & 7;
-        uint8_t rm  = (b2 >> 0) & 7;
-
-        string_t address = next_effective_address(&instruction_stream, mod, rm);
-
-        operand = OPERAND_XCHG;
-        dest = get_register_name(reg, w);
-        source = address;
-      } break;
-
-      case 0x70: // JO
-      case 0x71: // JNO
-      case 0x72: // JB/JNAE
-      case 0x73: // JNB/JAE
-      case 0x74: // JE/JZ
-      case 0x76: // JBE/JNA
-      case 0x75: // JNE/JNZ
-      case 0x77: // JNBE/JA
-      case 0x78: // JS
-      case 0x79: // JNS
-      case 0x7A: // JP/JPE
-      case 0x7B: // JNP/JPO
-      case 0x7C: // JL/JNGE
-      case 0x7D: // JNL/JGE
-      case 0x7E: // JLE/JNG
-      case 0x7F: // JNLE/JG
-      case 0xE0: // LOOPNZ/LOOPNE
-      case 0xE1: // LOOPZ/LOOPE
-      case 0xE2: // LOOP
-      case 0xE3: // JCXZ
-      {
-        int8_t inc = (int8_t)next_byte(&instruction_stream);
-
-        string_t label = empty_str;
-        size_t label_ip = (instruction_stream.data - start) + inc;
-        if (label_count < 4) {
-          for (size_t i = 0; i < label_count; i += 1) {
-            if (labels[i].ip == label_ip) {
-              label = labels[i].label;
-              break;
-            }
-          }
-
-          if (!label.length) {
-            label = string_pushf("label%d", label_ip);
-            labels[label_count++] = { label_ip, label };
-          }
-        } else {
-          error = STRING_LIT("Too many labels");
-        }
-
-        // TODO: Is there a nice way to map this?
-        switch(b1) {
-          case 0x70: operand = OPERAND_JO;     break;
-          case 0x71: operand = OPERAND_JNO;    break;
-          case 0x72: operand = OPERAND_JB;     break;
-          case 0x73: operand = OPERAND_JNB;    break;
-          case 0x74: operand = OPERAND_JE;     break;
-          case 0x75: operand = OPERAND_JNZ;    break;
-          case 0x76: operand = OPERAND_JBE;    break;
-          case 0x77: operand = OPERAND_JA;     break;
-          case 0x78: operand = OPERAND_JS;     break;
-          case 0x79: operand = OPERAND_JNS;    break;
-          case 0x7A: operand = OPERAND_JP;     break;
-          case 0x7B: operand = OPERAND_JNP;    break;
-          case 0x7C: operand = OPERAND_JL;     break;
-          case 0x7D: operand = OPERAND_JNL;    break;
-          case 0x7E: operand = OPERAND_JLE;    break;
-          case 0x7F: operand = OPERAND_JG;     break;
-          case 0xE0: operand = OPERAND_LOOPNZ; break;
-          case 0xE1: operand = OPERAND_LOOPZ;  break;
-          case 0xE2: operand = OPERAND_LOOP;   break;
-          case 0xE3: operand = OPERAND_JCXZ;   break;
-
-          default:
-            error = string_pushf("\n!!! Unexpected operand 0x%02x\n", b1);
-            break;
-        }
-        dest = string_pushf("%.*s ; %d", STRING_FMT(label), inc);
-      } break;
-
-      case 0x80: // Immed b,r/m
-      case 0x81: // Immed w,r/m
-      case 0x82: // Immed b,r/m
-      case 0x83: // Immed is,r/m
-      {
-        uint8_t w = (b1 >> 0) & 1;
-
-        uint8_t b2 = next_byte(&instruction_stream);
-        uint8_t mod = (b2 >> 6);
-        uint8_t op  = (b2 >> 3) & 7;
-        uint8_t rm  = (b2 >> 0) & 7;
-
-        string_t register_memory_name = next_register_memory(&instruction_stream, w, mod, rm);
-
-        uint16_t data;
-        if (b1 == 0x83) {
-          data = next_data_s16(&instruction_stream);
-        } else {
-          data = next_data_u16(&instruction_stream, w);
-        }
-
-        switch (op) {
-          case 0: operand = OPERAND_ADD; break;
-          case 1: assert(false && "(not used)");
-          case 2: 
-            error = STRING_LIT("TODO: adc");
-            break;
-          case 3: 
-            error = STRING_LIT("TODO: sbb");
-            break;
-          case 4: assert(false && "(not used)");
-          case 5: operand = OPERAND_SUB; break;
-          case 6: assert(false && "(not used)");
-          case 7: operand = OPERAND_CMP; break;
-
-          default: assert(false);
-        }
-        dest = register_memory_name;
-        // TODO: don't always do the size (only for memory, not register)
-        source = string_pushf("%s %d", w ? "word" : "byte", data);
-      } break;
-
-      case 0xA0: // MOV m -> AL
-      case 0xA1: // MOV m -> AX
-      case 0xA2: // MOV AX -> m
-      case 0xA3: // MOV AX -> m
-      {
-        uint8_t d = (b1 >> 1) & 1;
-        uint8_t w = (b1 >> 0) & 1;
-
-        string_t address = next_effective_address(&instruction_stream, 0, 6);
-        register_t reg = w ? REGISTER_AX : REGISTER_AL;
-
-        operand = OPERAND_MOV;
-        dest    = d ? address : register_names[reg];
-        source  = d ? register_names[reg] : address;
-      } break;
-
-      case 0xB0: // MOV i -> AL
-      case 0xB1: // MOV i -> CL
-      case 0xB2: // MOV i -> DL
-      case 0xB3: // MOV i -> BL
-      case 0xB4: // MOV i -> AH
-      case 0xB5: // MOV i -> CH
-      case 0xB6: // MOV i -> DH
-      case 0xB7: // MOV i -> BH
-      case 0xB8: // MOV i -> AX
-      case 0xB9: // MOV i -> CX
-      case 0xBA: // MOV i -> DX
-      case 0xBB: // MOV i -> BX
-      case 0xBC: // MOV i -> SP
-      case 0xBD: // MOV i -> BP
-      case 0xBE: // MOV i -> SI
-      case 0xBF: // MOV i -> DI
-      {
-        uint8_t w = b1 >= 0xB8; // TODO: does this "scale" (i.e. work for all values? probably not)
-
-        uint16_t data = next_data_u16(&instruction_stream, w);
-
-        operand = OPERAND_MOV;
-        dest    = register_names[b1 - 0xB1];
-        source  = string_pushf("%d", data);
-      } break;
-
-      case 0xC6: // MOV b,i,r/m
-      case 0xC7: // MOV w,i,r/m
-      {
-        uint8_t w = (b1 >> 0) & 1;
-
-        uint8_t b2 = next_byte(&instruction_stream);
-        uint8_t mod = (b2 >> 6);
-        // op?
-        uint8_t rm  = (b2 >> 0) & 7;
-
-        string_t address = next_effective_address(&instruction_stream, mod, rm);
-        uint16_t data    = next_data_u16(&instruction_stream, w);
-
-        operand = OPERAND_MOV;
-        dest    = address;
-        source  = string_pushf("%s %d", w ? "word" : "byte", data);
-      } break;
-
-      // INC, DEC, CALL id, CALL l id, JMP id, PUSH, -
-      case 0xFF: // Grp 2 w,r/m
-      {
-        uint8_t b2 = next_byte(&instruction_stream);
-        uint8_t mod = (b2 >> 6);
-        uint8_t op  = (b2 >> 3) & 7;
-        uint8_t rm  = (b2 >> 0) & 7;
-
-        switch (op) {
-          case 6: // PUSH MEM16
-            operand = OPERAND_PUSH;
-            string_t address = next_effective_address(&instruction_stream, mod, rm);
-            dest = string_pushf("word %.*s", STRING_FMT(address));
-            break;
-
-          // case 0: break; // INC  MEM16
-          // case 1: break; // DEC  MEM16
-          // case 2: break; // CALL REG16/MEM16 (intra)
-          // case 3: break; // CALL MEM16 (intersegment)
-          // case 4: break; // JMP  REG16/MEM16 (intersegment)
-          // case 7: assert(false); break; // (not used)
-
-          default: 
-            error = string_pushf("Unexpected op: 0b%.*s", 3, &bit_string_u8(op)[6]);
-            break;
-        }
-
-      } break;
-
-      default:
-        error = string_pushf("Unexpected instruction 0b%s", bit_string_u8(b1));
-        break;
-    }
-
+    // TODO: handle "simulating" instructions
 
     string_t text;
-    if (error.length) {
-      text = string_pushf("??? ; %.*s", STRING_FMT(error));
-    } else if (source.length) {
-      text = string_pushf("%.*s %.*s, %.*s", STRING_FMT(operand_names[operand]), STRING_FMT(dest), STRING_FMT(source));
+    if (decoder.error.length) {
+      text = string_pushf("??? ; %.*s", STRING_FMT(decoder.error));
     } else {
-      text = string_pushf("%.*s %.*s", STRING_FMT(operand_names[operand]), STRING_FMT(dest));
+      text = instruction_print(&decoder, instruction);
     }
 
+    // @TODO: this is only here because of labeled jmp's. But if we don't do those, we can just print directly.
     cmd_t *cmd = PUSH_ARRAY(cmd_t, 1);
     cmd->start = instruction_stream_start;
-    cmd->end   = instruction_stream.data;
+    cmd->end   = decoder.instruction_stream.data;
     cmd->text  = text;
 
     if (last_cmd) {
@@ -701,7 +841,7 @@ int main(int argc, char** argv) {
     }
     last_cmd = cmd;
 
-    if (error.length) break;
+    if (decoder.error.length) break;
   }
 
   // Print the stuff
@@ -715,9 +855,9 @@ int main(int argc, char** argv) {
 
   cmd_t *cmd = last_cmd->first;
   while (cmd != NULL) {
-    size_t ip = cmd->start - start;
-    for (size_t label_index = 0; label_index < label_count; label_index += 1) {
-      label_t label = labels[label_index];
+    size_t ip = cmd->start - decoder.start;
+    for (size_t label_index = 0; label_index < decoder.label_count; label_index += 1) {
+      label_t label = decoder.labels[label_index];
       if (label.ip == ip) {
         printf("%.*s:\n", STRING_FMT(label.label));
         break;
@@ -740,5 +880,5 @@ int main(int argc, char** argv) {
     cmd = cmd->next;
   }
 
-  return error.length;
+  return decoder.error.length;
 }
