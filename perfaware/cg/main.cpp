@@ -18,10 +18,11 @@ typedef int32_t  s32;
 typedef int32_t  b32;
 
 // MEMORY ---------------------------------------------------------------------
-static size_t global_memory_size = 4096 * 8;
+static size_t global_memory_size = 1024 * 1024 * 8;
 static u8* global_memory_base;
 static u8* global_memory;
 #define PUSH_ARRAY(TYPE, COUNT) (TYPE *)global_memory;                                            \
+  assert((sizeof(TYPE)*(COUNT))<global_memory_size && "ALLOC SIZE TOO LARGE");                    \
   memset(global_memory, 0, sizeof(TYPE) * (COUNT));                                               \
   global_memory += sizeof(TYPE) * (COUNT);                                                        \
   assert(((size_t)(global_memory - global_memory_base) < global_memory_size) && "OUT OF MEMORY")
@@ -57,14 +58,16 @@ struct label_t {
 
 #define LABEL_COUNT_MAX 4
 struct decoder_t {
-  string_t instruction_stream;
-  string_t error;
-
   u8 *start;
 
-  label_t labels[LABEL_COUNT_MAX];
+  string_t instruction_stream;
+
   u32 label_count;
+  label_t labels[LABEL_COUNT_MAX];
+
+  string_t error;
 };
+
 
 static string_t str_empty = STRING_LIT("");
 static string_t str_none = STRING_LIT("none");
@@ -143,23 +146,19 @@ static string_t op_code_names[OP_CODE_COUNT] = {
 enum register_t : u8 {
   REGISTER_NONE,
   // --------------
-  REGISTER_AL,
-  REGISTER_CL,
-  REGISTER_DL,
-  REGISTER_BL,
-  REGISTER_AH,
-  REGISTER_CH,
-  REGISTER_DH,
-  REGISTER_BH,
-  REGISTER_AX,
-  REGISTER_CX,
-  REGISTER_DX,
-  REGISTER_BX,
+  REGISTER_AX, REGISTER_AH, REGISTER_AL,
+  REGISTER_BX, REGISTER_BH, REGISTER_BL,
+  REGISTER_CX, REGISTER_CH, REGISTER_CL,
+  REGISTER_DX, REGISTER_DH, REGISTER_DL,
+
   REGISTER_SP,
   REGISTER_BP,
   REGISTER_SI,
   REGISTER_DI,
+
+  REGISTER_ES,
   REGISTER_CS,
+  REGISTER_SS,
   REGISTER_DS,
   // --------------
   REGISTER_COUNT,
@@ -167,23 +166,20 @@ enum register_t : u8 {
 
 static string_t register_names[REGISTER_COUNT] = {
   str_none,
-  STRING_LIT("al"),
-  STRING_LIT("cl"),
-  STRING_LIT("dl"),
-  STRING_LIT("bl"),
-  STRING_LIT("ah"),
-  STRING_LIT("ch"),
-  STRING_LIT("dh"),
-  STRING_LIT("bh"),
-  STRING_LIT("ax"),
-  STRING_LIT("cx"),
-  STRING_LIT("dx"),
-  STRING_LIT("bx"),
+
+  STRING_LIT("ax"), STRING_LIT("ah"), STRING_LIT("al"),
+  STRING_LIT("bx"), STRING_LIT("bh"), STRING_LIT("bl"),
+  STRING_LIT("cx"), STRING_LIT("ch"), STRING_LIT("cl"),
+  STRING_LIT("dx"), STRING_LIT("dh"), STRING_LIT("dl"),
+
   STRING_LIT("sp"),
   STRING_LIT("bp"),
   STRING_LIT("si"),
   STRING_LIT("di"),
+
+  STRING_LIT("es"),
   STRING_LIT("cs"),
+  STRING_LIT("ss"),
   STRING_LIT("ds"),
 };
 
@@ -234,8 +230,31 @@ struct instruction_t {
   u8 flags; // ???
 };
 
+struct simulator_t {
+  u16 registers[8];
+  u8 *memory;
+
+  // debug
+  b32 touched_registers[REGISTER_COUNT];
+
+  string_t error;
+};
+
+// REG | W=0 | W=1
+// 000 |  AL |  AX
+// 001 |  CL |  CX
+// 010 |  DL |  DX
+// 011 |  BL |  BX
+// 100 |  AH |  SP
+// 101 |  CH |  BP
+// 110 |  DH |  SI
+// 111 |  BH |  DI
 static register_t get_register(u8 reg, u8 w) {
-  register_t result = (register_t)((w * 8) + (reg + 1));
+  static register_t registers[2][8] = {
+    { REGISTER_AL, REGISTER_CL, REGISTER_DL, REGISTER_BL, REGISTER_AH, REGISTER_CH, REGISTER_DH, REGISTER_BH },
+    { REGISTER_AX, REGISTER_CX, REGISTER_DX, REGISTER_BX, REGISTER_SP, REGISTER_BP, REGISTER_SI, REGISTER_DI },
+  };
+  register_t result = registers[w][reg];
   return result;
 }
 
@@ -602,6 +621,45 @@ static instruction_t instruction_decode(decoder_t *decoder, size_t offset) {
 
     } break;
 
+    case 0x8C: // MOV sr,f,r/m
+    {
+        u8 b2 = next_byte(instruction_stream);
+
+        // sr: 00=ES, 01=CS, 10=SS, 11=DS
+
+        u8 mod = (b2 >> 6) & 3;
+        u8 sr  = (b2 >> 3) & 3;
+        u8 rm  = (b2 >> 0) & 7;
+
+        operand_t dest = next_address(instruction_stream, 1, mod, rm);
+
+        register_t reg = (register_t)(REGISTER_ES + sr);
+
+        result.opcode = OP_CODE_MOV;
+        result.dest = dest;
+        result.source.kind = OPERAND_KIND_REGISTER;
+        result.source.reg = reg;
+    } break;
+    case 0x8E: // MOV sr,t,r/m
+    {
+        u8 b2 = next_byte(instruction_stream);
+
+        // sr: 00=ES, 01=CS, 10=SS, 11=DS
+
+        u8 mod = (b2 >> 6) & 3;
+        u8 sr  = (b2 >> 3) & 3;
+        u8 rm  = (b2 >> 0) & 7;
+
+        operand_t source = next_address(instruction_stream, 1, mod, rm);
+
+        register_t reg = (register_t)(REGISTER_ES + sr);
+
+        result.opcode = OP_CODE_MOV;
+        result.dest.kind = OPERAND_KIND_REGISTER;
+        result.dest.reg = reg;
+        result.source = source;
+    } break;
+
     case 0xA0: // MOV m -> AL
     case 0xA1: // MOV m -> AX
     case 0xA2: // MOV AX -> m
@@ -642,7 +700,8 @@ static instruction_t instruction_decode(decoder_t *decoder, size_t offset) {
       u16 data = next_data_u16(instruction_stream, w);
 
       operand_t dest = { OPERAND_KIND_REGISTER };
-      dest.reg = (register_t)(b1 - 0xB0 + 1);
+      // dest.reg = (register_t)(b1 - 0xB0 + 1);
+      dest.reg = get_register((b1 - 0xB0) % 8, w);
 
       operand_t source = { OPERAND_KIND_IMMEDIATE };
       source.immediate = data;
@@ -682,24 +741,25 @@ static instruction_t instruction_decode(decoder_t *decoder, size_t offset) {
       u8 op  = (b2 >> 3) & 7;
       u8 rm  = (b2 >> 0) & 7;
 
-      switch (op) {
-        case 6: // PUSH MEM16
-          result.opcode = OP_CODE_PUSH;
+      // PUSH MEM16
+      if (op == 6) {
+        result.opcode = OP_CODE_PUSH;
 
-          operand_t address = next_address(instruction_stream, 1, mod, rm);
-          result.dest = address;
-          break;
-
-        // case 0: break; // INC  MEM16
-        // case 1: break; // DEC  MEM16
-        // case 2: break; // CALL REG16/MEM16 (intra)
-        // case 3: break; // CALL MEM16 (intersegment)
-        // case 4: break; // JMP  REG16/MEM16 (intersegment)
-        // case 7: assert(false); break; // (not used)
-
-        default: 
-          decoder->error = string_pushf("Unexpected op: 0b%.*s", 3, &bit_string_u8(op)[6]);
-          break;
+        operand_t address = next_address(instruction_stream, 1, mod, rm);
+        result.dest = address;
+      }
+      // INC  MEM16
+      else if (op == 0) {
+        result.opcode = OP_CODE_INC;
+        operand_t address = next_address(instruction_stream, 1, mod, rm);
+        result.dest = address;
+      // case 1: break; // DEC  MEM16
+      // case 2: break; // CALL REG16/MEM16 (intra)
+      // case 3: break; // CALL MEM16 (intersegment)
+      // case 4: break; // JMP  REG16/MEM16 (intersegment)
+      // case 7: assert(false); break; // (not used)
+      } else {
+        decoder->error = string_pushf("Unexpected op: 0b%.*s", 3, &bit_string_u8(op)[6]);
       }
     } break;
 
@@ -778,91 +838,133 @@ static string_t instruction_print(decoder_t *decoder, instruction_t instruction)
   return result;
 }
 
-static u16 registers[8];
+struct register_map_t {
+  b32 memory_pointer;
 
-static void register_set(register_t reg, s16 value) {
-  switch (reg) {
-  case REGISTER_AL: registers[0] &= value & 0xFF; break;
-  case REGISTER_AH: registers[0] &= ((value & 0xFF) << 8); break;
-  case REGISTER_AX: registers[0]  = value; break;
+  s32 index;
 
-  case REGISTER_BL: registers[1] &= value & 0xFF; break;
-  case REGISTER_BH: registers[1] &= ((value & 0xFF) << 8); break;
-  case REGISTER_BX: registers[1]  = value; break;
+  u16 mask;
+  u8 shift;
+};
+static register_map_t register_map[REGISTER_COUNT];
 
-  case REGISTER_CL: registers[2] &= value & 0xFF; break;
-  case REGISTER_CH: registers[2] &= ((value & 0xFF) << 8); break;
-  case REGISTER_CX: registers[2]  = value; break;
+static void init_register_map() {
+  register_map[REGISTER_AX] = { 0, 0, 0xFFFF, 0 };
+  register_map[REGISTER_AH] = { 0, 0, 0xFF00, 8 };
+  register_map[REGISTER_AL] = { 0, 0, 0x00FF, 0 };
 
-  case REGISTER_DL: registers[3] &= value & 0xFF; break;
-  case REGISTER_DH: registers[3] &= ((value & 0xFF) << 8); break;
-  case REGISTER_DX: registers[3]  = value; break;
+  register_map[REGISTER_BX] = { 0, 1, 0xFFFF, 0 };
+  register_map[REGISTER_BH] = { 0, 1, 0xFF00, 8 };
+  register_map[REGISTER_BL] = { 0, 1, 0x00FF, 0 };
 
-  case REGISTER_SP: registers[4]  = value; break;
-  case REGISTER_BP: registers[5]  = value; break;
-  case REGISTER_SI: registers[6]  = value; break;
-  case REGISTER_DI: registers[7]  = value; break;
+  register_map[REGISTER_CX] = { 0, 2, 0xFFFF, 0 };
+  register_map[REGISTER_CH] = { 0, 2, 0xFF00, 8 };
+  register_map[REGISTER_CL] = { 0, 2, 0x00FF, 0 };
 
-  case REGISTER_CS:
-  case REGISTER_DS:
-  case REGISTER_NONE:
-  case REGISTER_COUNT:
-    // TODO: no bueno
-    break;
-  }
+  register_map[REGISTER_DX] = { 0, 3, 0xFFFF, 0 };
+  register_map[REGISTER_DH] = { 0, 3, 0xFF00, 8 };
+  register_map[REGISTER_DL] = { 0, 3, 0x00FF, 0 };
+
+  register_map[REGISTER_SP] = { 0, 4, 0xFFFF, 0 };
+  register_map[REGISTER_BP] = { 0, 5, 0xFFFF, 0 };
+  register_map[REGISTER_SI] = { 0, 6, 0xFFFF, 0 };
+  register_map[REGISTER_DI] = { 0, 7, 0xFFFF, 0 };
+
+  // TODO: program sets base pointers for segment registers
+  register_map[REGISTER_ES] = { 1, 64 * 1024 * 0 };
+  register_map[REGISTER_CS] = { 1, 64 * 1024 * 1 };
+  register_map[REGISTER_SS] = { 1, 64 * 1024 * 3 };
+  register_map[REGISTER_DS] = { 1, 64 * 1024 * 4 };
+
+  register_map[REGISTER_NONE] = { 0, -1 };
 }
 
-static s16 register_get(register_t reg) {
-  s16 result = 0;
+static void register_set(simulator_t *sim, register_t reg, u16 value) {
+  register_map_t map = register_map[reg];
+  assert(map.index != -1 && "TODO: handle register_set");
 
-  switch (reg) {
-  case REGISTER_AL: result = registers[0] & 0xFF; break;
-  case REGISTER_AH: result = registers[0] & 0xFF00; break;
-  case REGISTER_AX: result = registers[0]; break;
+  if (map.memory_pointer) {
+    u8 *p = sim->memory + map.index;
+    u16 *p16 = (u16 *)p;
+    *p16 = value;
+  } else {
+    sim->registers[map.index] = (sim->registers[map.index] & ~map.mask) | ((value << map.shift) & map.mask);
+  }
 
-  case REGISTER_BL: result = registers[1] & 0xFF; break;
-  case REGISTER_BH: result = registers[1] & 0xFF00; break;
-  case REGISTER_BX: result = registers[1]; break;
+  sim->touched_registers[reg] = 1;
+}
 
-  case REGISTER_CL: result = registers[2] & 0xFF; break;
-  case REGISTER_CH: result = registers[2] & 0xFF00; break;
-  case REGISTER_CX: result = registers[2]; break;
+static u16 register_get(simulator_t *sim, register_t reg) {
+  u16 result = 0;
 
-  case REGISTER_DL: result = registers[3] & 0xFF; break;
-  case REGISTER_DH: result = registers[3] & 0xFF00; break;
-  case REGISTER_DX: result = registers[3]; break;
+  register_map_t map = register_map[reg];
 
-  case REGISTER_SP: result = registers[4]; break;
-  case REGISTER_BP: result = registers[5]; break;
-  case REGISTER_SI: result = registers[6]; break;
-  case REGISTER_DI: result = registers[7]; break;
-
-  case REGISTER_CS:
-  case REGISTER_DS:
-  case REGISTER_NONE:
-  case REGISTER_COUNT:
-    break;
+  if (map.memory_pointer) {
+    result = *(u16 *)(sim->memory + map.index);
+  } else {
+    result = (sim->registers[map.index] & map.mask) >> map.shift;
   }
 
   return result;
 }
 
-static string_t instruction_simulate(decoder_t *decoder, instruction_t instruction) {
+static string_t instruction_simulate(simulator_t *sim ,decoder_t *decoder, instruction_t instruction) {
+  // NOTE(cg): comments showing current regsiter state always reference full 16bit register, never high/low portion
+  static register_t register_remap[REGISTER_COUNT] = {
+    REGISTER_NONE,
+
+    REGISTER_AX, REGISTER_AX, REGISTER_AX,
+    REGISTER_BX, REGISTER_BX, REGISTER_BX,
+    REGISTER_CX, REGISTER_CX, REGISTER_CX,
+    REGISTER_DX, REGISTER_DX, REGISTER_DX,
+
+    REGISTER_SP,
+    REGISTER_BP,
+    REGISTER_SI,
+    REGISTER_DI,
+
+    REGISTER_ES,
+    REGISTER_CS,
+    REGISTER_SS,
+    REGISTER_DS,
+  };
+
   string_list_t sb = {};
 
   string_list_push(&sb, instruction_print(decoder, instruction));
 
   switch (instruction.opcode) {
   case OP_CODE_MOV: {
+      u16 before;
+      u16 after;
+      register_t reg;
+      // MOV ax, 1
       if (instruction.dest.kind == OPERAND_KIND_REGISTER && instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
-        register_t reg = instruction.dest.reg;
-        s16 before = register_get(reg);
-        s16 after = instruction.source.immediate;
-        register_set(reg, after);
-        string_list_pushf(&sb, " ; %.*s:0x%d->0x%d", STRING_FMT(register_names[reg]), before, after);
-      } else {
-        decoder->error = STRING_LIT("ERROR: simulate: Unhandled MOV");
+        register_t dest = instruction.dest.reg;
+        u16 value = instruction.source.immediate;
+
+        reg = register_remap[dest];
+
+        before = register_get(sim, reg);
+        register_set(sim, dest, value);
+        after = register_get(sim, reg);
       }
+      // MOV ax, bx
+      else if (instruction.dest.kind == OPERAND_KIND_REGISTER && instruction.source.kind == OPERAND_KIND_REGISTER) {
+        register_t dest = instruction.dest.reg;
+        register_t src  = instruction.source.reg;
+        u16 value = register_get(sim, src);
+
+        reg = register_remap[dest];
+
+        before = register_get(sim, reg);
+        register_set(sim, dest, value);
+        after = register_get(sim, reg);
+      } else {
+        sim->error = STRING_LIT("ERROR: simulate: Unhandled MOV");
+      }
+
+      string_list_pushf(&sb, " ; %.*s:0x%x->0x%x ", STRING_FMT(register_names[reg]), before, after);
   } break;
 
   case OP_CODE_NONE:
@@ -902,14 +1004,46 @@ static string_t instruction_simulate(decoder_t *decoder, instruction_t instructi
   return string_list_join(&sb);
 }
 
+static void print_usage(char *exe) {
+  fprintf(stderr, "Usage: %s <filename>\n", exe);
+}
+
 int main(int argc, char** argv) {
   if (argc == 1) {
-    fprintf(stderr, "Usage: sim[filename]\n");
+    print_usage(argv[0]);
     return 1;
   }
 
-  int print_bytes = argc > 2;
-  b32 simulate = print_bytes;
+  b32 decode = 0;
+  b32 simulate = 0;
+  b32 verbose = 0;
+
+  char *filepath = 0;
+
+  for (s32 i = 1; i < argc; i += 1) {
+    char *arg = argv[i];
+    if (arg[0] == '-') {
+      arg = &arg[1];
+      if (strcmp(arg, "decode") == 0) {
+        decode = 1;
+      } else if (strcmp(arg, "exec") == 0) {
+        simulate = 1;
+      } else if (strcmp(arg, "v") == 0) {
+        verbose = 1;
+      }
+    } else {
+      filepath = arg;
+    }
+  }
+
+  if (!filepath) {
+    print_usage(argv[0]);
+    return 1;
+  }
+  if (!decode && !simulate) {
+    print_usage(argv[0]);
+    return 1;
+  }
 
   global_memory_base = (u8 *)malloc(global_memory_size);
   assert(global_memory_base && "Failed to allocate data");
@@ -918,11 +1052,21 @@ int main(int argc, char** argv) {
 
   decoder_t decoder = { 0 };
 
-  char* filename = argv[1];
-  decoder.instruction_stream = read_entire_file(filename);
+  decoder.instruction_stream = read_entire_file(filepath);
+  if (decoder.instruction_stream.length == 0) {
+    fprintf(stderr, "Failed to open %s\n", filepath);
+    return 1;
+  }
   assert(decoder.instruction_stream.length != 0 && "Failed to read file");
-
   decoder.start = decoder.instruction_stream.data;
+
+  simulator_t sim = { 0 };
+  sim.memory = PUSH_ARRAY(u8, 1024 * 1024);
+
+  init_register_map();
+
+  string_list_t parts = string_split(string_cstring(filepath), '\\');
+  string_t filename = parts.last->string;
 
   struct cmd_t {
     cmd_t *first;
@@ -950,7 +1094,7 @@ int main(int argc, char** argv) {
     if (decoder.error.length) {
       text = string_pushf("??? ; %.*s", STRING_FMT(decoder.error));
     } else if (simulate) {
-      text = instruction_simulate(&decoder, instruction);
+      text = instruction_simulate(&sim, &decoder, instruction);
     } else {
       text = instruction_print(&decoder, instruction);
     }
@@ -976,14 +1120,15 @@ int main(int argc, char** argv) {
   // Print the stuff
 
   if (simulate) {
-    printf("--- test\\%s execution ---\n", filename);
+    printf("--- test\\%.*s execution ---\n", STRING_FMT(filename));
   } else {
-    printf("; %s  %zd bytes\n", filename, (size_t)(global_memory - global_memory_base));
-    printf("\n");
-    if (!print_bytes) {
-      printf("bits 16");
-      printf("\n");
+    printf("; %.*s\n", STRING_FMT(filename));
+    if (verbose) {
+      printf("; %zd bytes\n", (size_t)(global_memory - global_memory_base));
     }
+    printf("\n");
+    printf("bits 16");
+    printf("\n");
   }
 
   cmd_t *cmd = last_cmd->first;
@@ -998,7 +1143,7 @@ int main(int argc, char** argv) {
         }
       }
 
-      if (!simulate) {
+      if (verbose) {
         size_t len = cmd->end - cmd->start;
         printf("0x%03x  ", (uint32_t)ip);
         for (size_t i = 0; i < 6; i += 1) {
@@ -1016,15 +1161,23 @@ int main(int argc, char** argv) {
   }
 
   if (simulate) {
+    sim.touched_registers[REGISTER_AH] = 0;
+    sim.touched_registers[REGISTER_AL] = 0;
+    sim.touched_registers[REGISTER_BH] = 0;
+    sim.touched_registers[REGISTER_BL] = 0;
+    sim.touched_registers[REGISTER_CH] = 0;
+    sim.touched_registers[REGISTER_CL] = 0;
+    sim.touched_registers[REGISTER_DH] = 0;
+    sim.touched_registers[REGISTER_DL] = 0;
+
     printf("\nFinal registers:\n");
-    printf("      ax: 0x%04d (%d)\n", register_get(REGISTER_AX), register_get(REGISTER_AX));
-    printf("      bx: 0x%04d (%d)\n", register_get(REGISTER_BX), register_get(REGISTER_BX));
-    printf("      cx: 0x%04d (%d)\n", register_get(REGISTER_CX), register_get(REGISTER_CX));
-    printf("      dx: 0x%04d (%d)\n", register_get(REGISTER_DX), register_get(REGISTER_DX));
-    printf("      sp: 0x%04d (%d)\n", register_get(REGISTER_SP), register_get(REGISTER_SP));
-    printf("      bp: 0x%04d (%d)\n", register_get(REGISTER_BP), register_get(REGISTER_BP));
-    printf("      si: 0x%04d (%d)\n", register_get(REGISTER_SI), register_get(REGISTER_SI));
-    printf("      di: 0x%04d (%d)\n", register_get(REGISTER_DI), register_get(REGISTER_DI));
+    for (u8 reg_idx = REGISTER_AX; reg_idx < REGISTER_COUNT; reg_idx += 1) {
+      if (sim.touched_registers[reg_idx]) {
+        register_t reg = (register_t)reg_idx;
+        s16 value = register_get(&sim, reg);
+        printf("      %.*s: 0x%04x (%d)\n", STRING_FMT(register_names[reg]), value, value);
+      }
+    }
     printf("\n");
   }
 

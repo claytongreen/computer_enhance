@@ -9,13 +9,12 @@ void Start() {
   // check exe exists
   assert PathExists(exe);
 
-  if file != "" {
-    assert PathExists(file) == true;
-
-    Test(exe, ".", file);
-  } else {
+  // if file != "" {
+  //   assert PathExists(file) == true;
+  //   Test(exe, ".", file);
+  // } else {
     RunDefaultTests(exe);
-  }
+  // }
 }
 
 void RunDefaultTests(str exe) {
@@ -24,38 +23,94 @@ void RunDefaultTests(str exe) {
 
   Log("");
 
-  for str file in DirectoryEnumerate(test_dir):assert() {
-    if StringContains(file, ".asm") { continue; }
+  bool result = false;
 
-    Log("%file%...");
+  TestDecode(exe, test_dir, "listing_0037_single_register_mov");
+  TestDecode(exe, test_dir, "listing_0038_many_register_mov");
+  TestDecode(exe, test_dir, "listing_0039_more_movs");
+  TestDecode(exe, test_dir, "listing_0040_challenge_movs");
+  TestDecode(exe, test_dir, "listing_0041_add_sub_cmp_jnz");
+  // TestDecode(exe, test_dir, "listing_0042_completionist_decode");
 
-    bool result = Test(exe, test_dir, file);
-    if result == false { break; }
-
-    Log("");
-  }
-
-  if PathExists("build\\out.asm") { PathDelete("build\\out.asm"); }
-  if PathExists("build\\out_asm") { PathDelete("build\\out_asm"); }
+  TestDecode(exe, test_dir, "listing_0043_immediate_movs");
+  TestExec(exe, test_dir, "listing_0043_immediate_movs");
+  TestDecode(exe, test_dir, "listing_0044_register_movs");
+  TestExec(exe, test_dir, "listing_0044_register_movs");
+  TestDecode(exe, test_dir, "listing_0045_challenge_register_movs");
+  TestExec(exe, test_dir, "listing_0045_challenge_register_movs");
 }
 
-bool Test(str exe, str path, str file) {
-  if !SystemShellExecute("%exe% %path%\\%file% > build\\out.asm") {
-    SystemShellExecute("%exe% %path%\\%file% 1");
+bool TestExec(str exe, str path, str file) {
+  str fullPath = "%path%\\%file%";
 
+  if !Exec(exe, fullPath) {
     return false;
   }
+  if !CompareExec(exe, fullPath) {
+    return false;
+  }
+
+  return true;
+}
+
+bool TestDecode(str exe, str path, str file) {
+  str fullPath = "%path%\\%file%";
+
+  if !Disassemble(exe, fullPath) {
+    return false;
+  }
+  if !Assemble(exe, fullPath) {
+    return false;
+  }
+  if !CompareAssemble(exe, fullPath) {
+    return false;
+  }
+
+  return true;
+}
+
+bool Disassemble(str exe, str file) {
+  if !SystemShellExecute("%exe% -decode %file% > build\\out.asm") {
+    SystemShellExecute("%exe% -decode -v %file%");
+    return false;
+  }
+
+  return true;
+}
+
+bool Exec(str exe, str file) {
+  if !SystemShellExecute("%exe% -exec %file% > build\\out.txt") {
+    SystemShellExecute("%exe% -exec -v %file%");
+    return false;
+  }
+
+  return true;
+}
+bool CompareExec(str exe, str file) {
+  if !SystemShellExecute("fc /L %file%.txt build\\out.txt") {
+    return false;
+  }
+
+  return true;
+}
+
+bool Assemble(str exe, str file) {
   if !SystemShellExecute("nasm -o build\\out_asm build\\out.asm") {
-		if PathExists("out.asm") {
-    	SystemShellExecute("type out.asm");
-		} else {
-			SystemShellExecute("%exe% %path%\\%file% 1");
-		}
+    if PathExists("out.asm") {
+      SystemShellExecute("type out.asm");
+    } else {
+      SystemShellExecute("%exe% %file% 1");
+    }
 
     return false;
   }
-  if !SystemShellExecute("fc /B %path%\\%file% build\\out_asm") {
-    str orig = FileReadAll("%path%\\%file%.asm"):assert();
+
+  return true;
+}
+
+bool CompareAssemble(str exe, str file) {
+  if !SystemShellExecute("fc /B %file% build\\out_asm") {
+    str orig = FileReadAll("%file%.asm"):assert();
     str disa = FileReadAll("build\\out.asm"):assert();
 
     str[] orig_lines = new str[];

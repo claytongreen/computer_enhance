@@ -1,5 +1,3 @@
-#pragma once
-
 struct string_t {
   uint8_t* data;
   size_t length;
@@ -54,6 +52,31 @@ static void string_list_push(string_list_t* list, string_t string) {
   list->total_length += string.length;
 }
 
+// TODO: split on string instead of char
+static string_list_t string_split(string_t string, u8 split) {
+  string_list_t result = {};
+
+  u8 *at = string.data;
+  u8 *end = string.data + string.length;
+
+  u8 *start = at;
+  while (at != end) {
+    if (*at == split) {
+      string_t part = { start, (size_t)(at - start) };
+      string_list_push(&result, part);
+      at += 1; // skip the split
+      start = at;
+    }
+
+    at += 1;
+  }
+
+  string_t part = { start, (size_t)(at - start) };
+  string_list_push(&result, part);
+
+  return result;
+}
+
 static string_t string_list_join(string_list_t* list) {
   // TODO: handle putting things in between list parts
   size_t length = list->total_length;
@@ -80,7 +103,7 @@ static string_t string_pushfv(const char* fmt, va_list args) {
   // try to build the string in 1024 bytes
   size_t buffer_size = 1024;
   uint8_t* buffer = PUSH_ARRAY(uint8_t, buffer_size);
-  size_t actual_size = vsnprintf((char*)buffer, buffer_size, fmt, args);
+  size_t actual_size = (size_t)vsnprintf((char*)buffer, buffer_size, fmt, args);
 
   string_t result = {};
   if (actual_size < buffer_size) {
