@@ -25,19 +25,19 @@ void RunDefaultTests(str exe) {
 
   bool result = false;
 
-  /* TestDecode(exe, test_dir, "listing_0037_single_register_mov"); */
-  /* TestDecode(exe, test_dir, "listing_0038_many_register_mov"); */
-  /* TestDecode(exe, test_dir, "listing_0039_more_movs"); */
-  /* TestDecode(exe, test_dir, "listing_0040_challenge_movs"); */
-  /* TestDecode(exe, test_dir, "listing_0041_add_sub_cmp_jnz"); */
+  TestDecode(exe, test_dir, "listing_0037_single_register_mov");
+  TestDecode(exe, test_dir, "listing_0038_many_register_mov");
+  TestDecode(exe, test_dir, "listing_0039_more_movs");
+  TestDecode(exe, test_dir, "listing_0040_challenge_movs");
+  TestDecode(exe, test_dir, "listing_0041_add_sub_cmp_jnz");
   // TestDecode(exe, test_dir, "listing_0042_completionist_decode");
 
-  /* TestDecode(exe, test_dir, "listing_0043_immediate_movs"); */
-  /* TestExec(exe, test_dir, "listing_0043_immediate_movs"); */
-  /* TestDecode(exe, test_dir, "listing_0044_register_movs"); */
-  /* TestExec(exe, test_dir, "listing_0044_register_movs"); */
-  /* TestDecode(exe, test_dir, "listing_0045_challenge_register_movs"); */
-  /* TestExec(exe, test_dir, "listing_0045_challenge_register_movs"); */
+  TestDecode(exe, test_dir, "listing_0043_immediate_movs");
+  TestExec(exe, test_dir, "listing_0043_immediate_movs");
+  TestDecode(exe, test_dir, "listing_0044_register_movs");
+  TestExec(exe, test_dir, "listing_0044_register_movs");
+  // TestDecode(exe, test_dir, "listing_0045_challenge_register_movs");
+  // TestExec(exe, test_dir, "listing_0045_challenge_register_movs");
   TestDecode(exe, test_dir, "listing_0046_add_sub_cmp");
   TestExec(exe, test_dir, "listing_0046_add_sub_cmp");
 }

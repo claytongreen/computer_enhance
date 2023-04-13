@@ -1,21 +1,9 @@
-struct string_t {
-  uint8_t* data;
-  size_t length;
-};
+#include "string.h"
+#include "mem.h"
 
-struct string_list_node_t {
-  string_list_node_t* next;
-  string_t string;
-};
-
-struct string_list_t {
-  string_list_node_t* first;
-  string_list_node_t* last;
-  size_t node_count;
-  size_t total_length;
-};
-
-#define STRING_FMT(s) (int)((s).length), (s).data
+#include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 static string_t string_create(uint8_t* data, size_t length) {
   string_t* string = PUSH_ARRAY(string_t, 1);
@@ -28,13 +16,6 @@ static string_t string_cstring(const char* s) {
   string_t string = string_create((uint8_t*)s, strlen(s));
   return string;
 }
-
-static string_t _string_create(uint8_t *data, size_t length) {
-  string_t result = { data, length };
-  return result;
-}
-
-#define STRING_LIT(s) _string_create((uint8_t *)(s), sizeof(s) - 1)
 
 static void string_list_push(string_list_t* list, string_t string) {
   string_list_node_t* node = PUSH_ARRAY(string_list_node_t, 1);
@@ -142,10 +123,10 @@ static void string_list_pushf(string_list_t* list, const char* fmt, ...) {
   string_list_push(list, string);
 }
 
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 static char bits[10] = "0000_0000";
-static char* bit_string_u8(uint8_t byte) {
+char* bit_string_u8(uint8_t byte) {
   for (size_t i = 0; i < 4; i += 1) {
     bits[i] = (byte >> (7 - i)) & 1 ? '1' : '0';
   }
