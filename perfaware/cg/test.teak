@@ -9,12 +9,12 @@ void Start() {
   // check exe exists
   assert PathExists(exe);
 
-  // if file != "" {
-  //   assert PathExists(file) == true;
-  //   Test(exe, ".", file);
-  // } else {
+  if file != "" {
+    assert PathExists(file) == true;
+    TestDecode(exe, ".", file);
+  } else {
     RunDefaultTests(exe);
-  // }
+  }
 }
 
 void RunDefaultTests(str exe) {
@@ -23,26 +23,29 @@ void RunDefaultTests(str exe) {
 
   Log("");
 
-  bool result = false;
+  // decoding
+  // if (!TestDecode(exe, test_dir, "listing_0037_single_register_mov")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0038_many_register_mov")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0039_more_movs")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0040_challenge_movs")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0041_add_sub_cmp_jnz")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0042_completionist_decode")) { return; }
 
-  TestDecode(exe, test_dir, "listing_0037_single_register_mov");
-  TestDecode(exe, test_dir, "listing_0038_many_register_mov");
-  TestDecode(exe, test_dir, "listing_0039_more_movs");
-  TestDecode(exe, test_dir, "listing_0040_challenge_movs");
-  TestDecode(exe, test_dir, "listing_0041_add_sub_cmp_jnz");
-  // TestDecode(exe, test_dir, "listing_0042_completionist_decode");
+  // simulation
+  // if (!TestDecode(exe, test_dir, "listing_0043_immediate_movs")) { return; }
+  // if (!TestExec(exe, test_dir, "listing_0043_immediate_movs", "")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0044_register_movs")) { return; }
+  // if (!TestExec(exe, test_dir, "listing_0044_register_movs", "")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0045_challenge_register_movs")) { return; }
+  // if (!TestExec(exe, test_dir, "listing_0045_challenge_register_movs", "")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0046_add_sub_cmp")) { return; }
+  // if (!TestExec(exe, test_dir, "listing_0046_add_sub_cmp", "flags")) { return; }
+  // if (!TestDecode(exe, test_dir, "listing_0047_challenge_flags")) { return; }
+  if (!TestExec(exe, test_dir, "listing_0047_challenge_flags", "flags")) { return; }
 
-  TestDecode(exe, test_dir, "listing_0043_immediate_movs");
-  TestExec(exe, test_dir, "listing_0043_immediate_movs");
-  TestDecode(exe, test_dir, "listing_0044_register_movs");
-  TestExec(exe, test_dir, "listing_0044_register_movs");
-  // TestDecode(exe, test_dir, "listing_0045_challenge_register_movs");
-  // TestExec(exe, test_dir, "listing_0045_challenge_register_movs");
-  TestDecode(exe, test_dir, "listing_0046_add_sub_cmp");
-  TestExec(exe, test_dir, "listing_0046_add_sub_cmp");
 }
 
-bool TestExec(str exe, str path, str file) {
+bool TestExec(str exe, str path, str file, str args) {
   str fullPath = "%path%\\%file%";
 
   if !Exec(exe, fullPath) {

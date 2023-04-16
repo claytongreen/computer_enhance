@@ -50,6 +50,7 @@ static string_t str_none = STRING_LIT("none");
 
 
 char* bit_string_u8(u8 byte);
+char* bit_string16(u16 byte);
 
 
 #endif // _STRING_H

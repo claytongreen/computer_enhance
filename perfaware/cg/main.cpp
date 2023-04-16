@@ -31,6 +31,8 @@ int main(int argc, char **argv) {
   b32 simulate = 0;
   b32 verbose = 0;
 
+  b32 flags = 0;
+
   char *filepath = 0;
 
   for (s32 i = 1; i < argc; i += 1) {
@@ -43,6 +45,8 @@ int main(int argc, char **argv) {
         simulate = 1;
       } else if (strcmp(arg, "v") == 0) {
         verbose = 1;
+      } else if (strcmp(arg, "flags") == 0) {
+        flags = 1;
       }
     } else {
       filepath = arg;
@@ -105,13 +109,14 @@ int main(int argc, char **argv) {
 
       instruction_simulate(&sim, instruction);
 
+      // TODO: move this to printer?
       if (sim.error.length) {
         text = string_pushf(" ; %.*s", STRING_FMT(sim.error));
       } else {
         string_list_t sb = {};
         string_list_push(&sb, instruction_print(&sim, instruction));
         string_list_push(&sb, STRING_LIT(" ; "));
-
+        //
         // TODO: print ip
 
         if (reg != REGISTER_NONE) {
@@ -119,7 +124,7 @@ int main(int argc, char **argv) {
           string_list_pushf(&sb, "%.*s:0x%x->0x%x ", STRING_FMT(register_names[reg]), reg_before, reg_after);
         }
 
-        if (flags_before != sim.flags) {
+        if (flags && flags_before != sim.flags) {
           string_t before = print_flags(flags_before);
           string_t after = print_flags(sim.flags);
           string_list_pushf(&sb, "flags:%.*s->%.*s ", STRING_FMT(before), STRING_FMT(after));
@@ -207,8 +212,11 @@ int main(int argc, char **argv) {
         printf("      %.*s: 0x%04x (%d)\n", STRING_FMT(register_names[reg]), value, value);
       }
     }
-    string_t flags = print_flags(sim.flags);
-    printf("   flags: %.*s\n\n", STRING_FMT(flags));
+    if (flags) {
+      string_t flags = print_flags(sim.flags);
+      printf("   flags: %.*s\n", STRING_FMT(flags));
+    }
+    printf("\n");
   }
 
   return sim.error.length;

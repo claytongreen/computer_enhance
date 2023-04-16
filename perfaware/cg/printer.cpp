@@ -2,18 +2,18 @@
 #include "instruction.h"
 #include "sim.h"
 
-static string_t operand_print(simulator_t *sim, operand_t operand) {
+
+static string_t operand_print(simulator_t *sim, u32 instruction_flags, operand_t operand) {
   string_t result = {0};
 
   switch (operand.kind) {
   case OPERAND_KIND_IMMEDIATE: {
-    result = string_pushf("%d", operand.immediate);
-  } break;
-  case OPERAND_KIND_IMMEDIATE8: {
-    result = string_pushf("byte %d", operand.immediate);
-  } break;
-  case OPERAND_KIND_IMMEDIATE16: {
-    result = string_pushf("word %d", operand.immediate);
+    // TODO: when to print byte/word
+    if (instruction_flags & INSTRUCTION_FLAG_SIGN_EXTEND) {
+      result = string_pushf("%d", operand.immediate);
+    } else {
+      result = string_pushf("%d", operand.immediate);
+    }
   } break;
   case OPERAND_KIND_REGISTER: {
     result = register_names[operand.reg];
@@ -48,6 +48,7 @@ static string_t operand_print(simulator_t *sim, operand_t operand) {
   } break;
 
   case OPERAND_KIND_NONE:
+  case OPERAND_KIND_COUNT:
     break;
   }
 
@@ -58,12 +59,11 @@ static string_t instruction_print(simulator_t *sim, instruction_t instruction) {
   string_t result;
 
   string_t opcode = op_code_names[instruction.opcode];
-  string_t dest = operand_print(sim, instruction.dest);
+  string_t dest = operand_print(sim, instruction.flags, instruction.dest);
 
   if (instruction.source.kind != OPERAND_KIND_NONE) {
-    string_t source = operand_print(sim, instruction.source);
-    result = string_pushf("%.*s %.*s, %.*s", STRING_FMT(opcode),
-                          STRING_FMT(dest), STRING_FMT(source));
+    string_t source = operand_print(sim, instruction.flags, instruction.source);
+    result = string_pushf("%.*s %.*s, %.*s", STRING_FMT(opcode), STRING_FMT(dest), STRING_FMT(source));
   } else {
     result = string_pushf("%.*s %.*s", STRING_FMT(opcode), STRING_FMT(dest));
   }
@@ -80,7 +80,7 @@ static string_t print_flags(u16 flags) {
   if (flags & FLAG_ZERO)             string_list_push(&sb, STRING_LIT("Z"));
   if (flags & FLAG_SIGN)             string_list_push(&sb, STRING_LIT("S"));
   if (flags & FLAG_TRAP)             string_list_push(&sb, STRING_LIT("T"));
-  if (flags & FLAG_INTERRUPT)        string_list_push(&sb, STRING_LIT("I"));
+  if (flags & FLAG_INTERRUPT_ENABLE) string_list_push(&sb, STRING_LIT("I"));
   if (flags & FLAG_DIRECTION)        string_list_push(&sb, STRING_LIT("D"));
   if (flags & FLAG_OVERFLOW)         string_list_push(&sb, STRING_LIT("O"));
 

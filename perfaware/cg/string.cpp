@@ -125,13 +125,32 @@ static void string_list_pushf(string_list_t* list, const char* fmt, ...) {
 
 // -----------------------------------------------------------------------------
 
-static char bits[10] = "0000_0000";
-char* bit_string_u8(uint8_t byte) {
+static char bits[20] = "0000_0000 0000_0000";
+char* bit_string_u8(u8 byte) {
   for (size_t i = 0; i < 4; i += 1) {
     bits[i] = (byte >> (7 - i)) & 1 ? '1' : '0';
   }
   for (size_t i = 4; i < 8; i += 1) {
     bits[1 + i] = (byte >> (7 - i)) & 1 ? '1' : '0';
+  }
+
+  bits[9] = 0;
+
+  return bits;
+}
+
+char *bit_string16(u16 word) {
+  for (size_t i = 0; i < 4; i += 1) {
+    bits[i] = (word >> (15 - i)) & 1 ? '1' : '0';
+  }
+  for (size_t i = 4; i < 8; i += 1) {
+    bits[1 + i] = (word >> (15 - i)) & 1 ? '1' : '0';
+  }
+  for (size_t i = 8; i < 12; i += 1) {
+    bits[2 + i] = (word >> (15 - i)) & 1 ? '1' : '0';
+  }
+  for (size_t i = 12; i < 16; i += 1) {
+    bits[3 + i] = (word >> (15 - i)) & 1 ? '1' : '0';
   }
 
   return bits;

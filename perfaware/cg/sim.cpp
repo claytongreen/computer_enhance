@@ -2,6 +2,90 @@
 #include "instruction.h"
 #include "string.h"
 
+
+enum flag_set_kind_t {
+  FLAG_SET_KIND_ZERO = 0,
+  FLAG_SET_KIND_ONE  = 1,
+  FLAG_SET_KIND_RESULT,
+};
+struct flag_set_t {
+  u8 flag_count;
+
+  flag_t          flags[6];
+  flag_set_kind_t kinds[6];
+};
+
+static flag_set_t instruction_flags[OP_CODE_COUNT] = {
+  {}, // OP_CODE_NONE
+  // OP_CODE_ADD
+  { 6,
+    { FLAG_CARRY,           FLAG_ZERO,            FLAG_SIGN,            FLAG_OVERFLOW,        FLAG_PARITY,          FLAG_AUXILIARY_CARRY },
+    { FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT },
+  },
+  // OP_CODE_CMP
+  { 6,
+    { FLAG_CARRY,           FLAG_ZERO,            FLAG_SIGN,            FLAG_OVERFLOW,        FLAG_PARITY,          FLAG_AUXILIARY_CARRY },
+    { FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT },
+  },
+  // OP_CODE_DEC
+  {},
+  // OP_CODE_INC
+  {},
+  // OP_CODE_JA
+  {},
+  // OP_CODE_JB
+  {},
+  // OP_CODE_JBE
+  {},
+  // OP_CODE_JCXZ
+  {},
+  // OP_CODE_JE
+  {},
+  // OP_CODE_JG
+  {},
+  // OP_CODE_JL
+  {},
+  // OP_CODE_JLE
+  {},
+  // OP_CODE_JNB
+  {},
+  // OP_CODE_JNL
+  {},
+  // OP_CODE_JNO
+  {},
+  // OP_CODE_JNP
+  {},
+  // OP_CODE_JNS
+  {},
+  // OP_CODE_JNZ
+  {},
+  // OP_CODE_JO
+  {},
+  // OP_CODE_JP
+  {},
+  // OP_CODE_JS
+  {},
+  // OP_CODE_LOOP
+  {},
+  // OP_CODE_LOOPNZ
+  {},
+  // OP_CODE_LOOPZ
+  {},
+  // OP_CODE_MOV
+  {},
+  // OP_CODE_XCHG
+  {},
+  // OP_CODE_POP
+  {},
+  // OP_CODE_PUSH
+  {},
+  // OP_CODE_SUB
+  { 6,
+    { FLAG_CARRY,           FLAG_ZERO,            FLAG_SIGN,            FLAG_OVERFLOW,        FLAG_PARITY,          FLAG_AUXILIARY_CARRY },
+    { FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT, FLAG_SET_KIND_RESULT },
+  },
+};
+
 // TODO: there's got to be a better way
 static register_t register_remap[REGISTER_COUNT] = {
     REGISTER_NONE,
@@ -86,16 +170,15 @@ static u8 next_byte(string_t *instruction_stream) {
   return byte;
 }
 
-static s16 next_data_s16(string_t *instruction_stream) {
-  u8 data = (s16)next_byte(instruction_stream);
-  return data;
-}
+static u16 next_data16(string_t *instruction_stream, u8 w, u8 s) {
+  u16 data = next_byte(instruction_stream);
 
-static u16 next_data_u16(string_t *instruction_stream, u8 w) {
-  u8 lo = next_byte(instruction_stream);
-  u8 hi = (w == 1) ? next_byte(instruction_stream) : ((lo & 0x80) ? 0xff : 0);
-
-  u16 data = (((s16)hi) << 8) | (u16)lo;
+  if (s && w) {
+    data = -((data ^ 0xFF) + 1);
+  } else if (w) {
+    u8 hi = next_byte(instruction_stream);
+    data = (((s16)hi) << 8) | (data & 0xff);
+  }
 
   return data;
 }
@@ -107,17 +190,15 @@ static operand_t next_address(string_t *instruction_stream, u8 w, u8 mod, u8 rm)
     result.kind = OPERAND_KIND_REGISTER;
     result.reg = get_register(rm, w);
   } else if (mod == 0 && rm == 6) {
-    // @TODO: next_data_s16?
     result.kind = OPERAND_KIND_ADDRESS;
-    result.address.offset = next_data_u16(instruction_stream, 1);
+    result.address.offset = next_data16(instruction_stream, 1, 0);
   } else {
     result.kind = OPERAND_KIND_ADDRESS;
     result.address.registers[0] = effective_address[0][rm];
     result.address.registers[1] = effective_address[1][rm];
     result.address.register_count = 2;
     if (mod) {
-      // @TODO: next_data_s16?
-      result.address.offset = next_data_u16(instruction_stream, mod == 2 ? 1 : 0);
+      result.address.offset = next_data16(instruction_stream, mod == 2 ? 1 : 0, 0);
     }
   }
 
@@ -133,6 +214,9 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   result.ip = instruction_stream.data;
 
   u8 b1 = next_byte(&instruction_stream);
+
+  u8 w = 0;
+  u8 s = 0;
 
   switch (b1) {
   case 0x00: // ADD b,f,r/m
@@ -153,7 +237,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   case 0x8B: // MOV w,t,r/m
   {
     u8 d = (b1 >> 1) & 1;
-    u8 w = (b1 >> 0) & 1;
+    w = (b1 >> 0) & 1;
 
     u8 b2 = next_byte(&instruction_stream);
     u8 mod = (b2 >> 6);
@@ -210,9 +294,9 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   case 0x3C: // CMP b,ia
   case 0x3D: // CMP w,ia
   {
-    u8 w = (b1 >> 0) & 1;
+    w = (b1 >> 0) & 1;
 
-    u16 data = next_data_u16(&instruction_stream, w);
+    u16 data = next_data16(&instruction_stream, w, 0);
 
     switch (b1) {
     case 0x04:
@@ -328,7 +412,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
 
   case 0x87: // XCHG w,r/m
   {
-    u8 w = (b1 >> 0) & 1;
+    w = (b1 >> 0) & 1;
 
     u8 b2 = next_byte(&instruction_stream);
     u8 mod = (b2 >> 6);
@@ -464,7 +548,8 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   case 0x82: // Immed b,r/m
   case 0x83: // Immed is,r/m
   {
-    u8 w = (b1 >> 0) & 1;
+    s = (b1 >> 1) & 1;
+    w = (b1 >> 0) & 1;
 
     u8 b2 = next_byte(&instruction_stream);
     u8 mod = (b2 >> 6);
@@ -473,8 +558,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
 
     operand_t dest = next_address(&instruction_stream, w, mod, rm);
 
-    u16 data = b1 == 0x83 ? next_data_s16(&instruction_stream)
-                          : next_data_u16(&instruction_stream, w);
+    u16 data = next_data16(&instruction_stream, w, s);
 
     switch (op) {
     case 0:
@@ -503,9 +587,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       break;
     }
 
-    result.source.kind =
-        (mod == 3) ? OPERAND_KIND_IMMEDIATE
-                   : (w ? OPERAND_KIND_IMMEDIATE16 : OPERAND_KIND_IMMEDIATE8);
+    result.source.kind = OPERAND_KIND_IMMEDIATE;
     result.source.immediate = data;
 
     result.dest = dest;
@@ -557,7 +639,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   case 0xA3: // MOV AX -> m
   {
     u8 d = (b1 >> 1) & 1;
-    u8 w = (b1 >> 0) & 1;
+    w = (b1 >> 0) & 1;
 
     operand_t op_addr = next_address(&instruction_stream, 0, 0, 6);
 
@@ -586,9 +668,9 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   case 0xBE: // MOV i -> SI
   case 0xBF: // MOV i -> DI
   {
-    u8 w = b1 >= 0xB8; // TODO: does this "scale" (i.e. work for all values? probably not)
+    w = b1 >= 0xB8; // TODO: does this "scale" (i.e. work for all values? probably not)
 
-    u16 data = next_data_u16(&instruction_stream, w);
+    u16 data = next_data16(&instruction_stream, w, 0);
 
     operand_t dest = {OPERAND_KIND_REGISTER};
     // dest.reg = (register_t)(b1 - 0xB0 + 1);
@@ -605,7 +687,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   case 0xC6: // MOV b,i,r/m
   case 0xC7: // MOV w,i,r/m
   {
-    u8 w = (b1 >> 0) & 1;
+    w = (b1 >> 0) & 1;
 
     u8 b2 = next_byte(&instruction_stream);
     u8 mod = (b2 >> 6);
@@ -613,13 +695,13 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
     u8 rm = (b2 >> 0) & 7;
 
     operand_t op_addr = next_address(&instruction_stream, w, mod, rm);
-    u16 data = next_data_u16(&instruction_stream, w);
+    u16 data = next_data16(&instruction_stream, w, 0);
 
     result.opcode = OP_CODE_MOV;
 
     result.dest = op_addr;
 
-    result.source.kind = w ? OPERAND_KIND_IMMEDIATE16 : OPERAND_KIND_IMMEDIATE8;
+    result.source.kind = OPERAND_KIND_IMMEDIATE;
     result.source.immediate = data;
 
   } break;
@@ -659,6 +741,13 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
     break;
   }
 
+  if (w) {
+    result.flags |= INSTRUCTION_FLAG_WIDE;
+  }
+  if (s) {
+    result.flags |= INSTRUCTION_FLAG_SIGN_EXTEND;
+  }
+
   result.bytes_count = instruction_stream.data - result.ip;
 
   return result;
@@ -669,35 +758,99 @@ static void flag_set(u16 *flags, flag_t flag, b32 value) {
   else       *flags &= ~flag;
 }
 
+static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u16 before) {
+  flag_set_t flags = instruction_flags[instruction.opcode];
+
+  for (u32 i = 0; i < flags.flag_count; i += 1) {
+    flag_set_kind_t kind = flags.kinds[i];
+    flag_t flag = flags.flags[i];
+
+    b32 flag_result = kind;
+    if (kind == FLAG_SET_KIND_RESULT) {
+      flag_result = 0;
+
+      if (flag & FLAG_CARRY) {
+        // TODO
+        b32 carry = 0;
+        // if (instruction.flags & INSTRUCTION_FLAG_WIDE) {
+          b32 a = (before >> 15) & 1;
+          b32 b = (result >> 15) & 1;
+          carry = a && !b;
+        // } else {
+        //   b32 a = ((before & 0xff) >> 7) & 1;
+        //   b32 b = ((result & 0xff) >> 7) & 1;
+        //   carry = a && !b;
+        // }
+
+        flag_result = carry;
+      } else if (flag & FLAG_PARITY) {
+        b32 parity = 1;
+        s8 check = (s8)(result & 0xFF);
+        for (u8 i = 0; i < 8; i += 1) {
+          if (result & (1 << i)) {
+            parity = parity ? 0 : 1;
+          }
+        }
+
+        flag_result = parity;
+      } else if (flag & FLAG_AUXILIARY_CARRY) {
+        b32 aux = 0;
+
+        // TODO: not quite right...
+#define HI(x) (((x) >> 8) & 1)
+#define LO(x) (((x) >> 7) & 1)
+        aux = (LO(before) && HI(result)) || (HI(before) && LO(result));
+#undef HI
+#undef LO
+
+        flag_result = aux;
+      } else if (flag & FLAG_ZERO) {
+        b32 zero = result == 0;
+        flag_result = zero;
+      } else if (flag & FLAG_SIGN) {
+        b32 sign = 0x8000 & result;
+        flag_result = sign;
+      } else if (flag & FLAG_OVERFLOW) {
+        // TODO: not quite right...
+        b32 overflow = ((before >> 15) & 1) != ((result >> 15) & 1);
+        flag_result = overflow;
+      }
+    }
+
+    flag_set(&sim->flags, flag, flag_result);
+  }
+}
+
 // NOTE(cg): comments showing current regsiter state always reference full 16bit register, never high/low portion
 // TODO: return next IP?
 static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
-  register_t reg = REGISTER_NONE;
+  u16 result = 0;
+  u16 before = 0;
+
   switch (instruction.opcode) {
   case OP_CODE_MOV: {
-    reg = instruction.dest.reg;
+    register_t reg = instruction.dest.reg;
 
     // MOV ax, 1
     if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
-      u16 value = instruction.source.immediate;
-      register_set(sim, reg, value);
+      result = instruction.source.immediate;
+      register_set(sim, reg, result);
     }
     // MOV ax, bx
     else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
-      u16 value = register_get(sim, instruction.source.reg);
-      register_set(sim, reg, value);
+      result = register_get(sim, instruction.source.reg);
+      register_set(sim, reg, result);
     } else {
       sim->error = STRING_LIT("ERROR: simulate: Unhandled MOV");
       break;
     }
-
   } break;
 
   case OP_CODE_ADD:
   case OP_CODE_SUB: {
-    reg = instruction.dest.reg;
+    register_t reg = instruction.dest.reg;
 
-    u16 src_value = 0;
+    s16 src_value = 0;
 
     // ADD, SUB ax, 1
     if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
@@ -711,33 +864,19 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
       break;
     }
 
-    u16 value = register_get(sim, reg);
+    before = register_get(sim, reg);
+    result = before;
     if (instruction.opcode == OP_CODE_ADD) {
-      value += src_value;
+      result += src_value;
     } else {
-      value -= src_value;
+      result -= src_value;
     }
 
-    register_set(sim, reg, value);
-
-    // NOTE(cg): parity flag is only set on last 8 bits
-    b32 parity = 1;
-    for (u8 i = 8; i < 16; i += 1) {
-      if ((value >> i) & 1) {
-        parity = ~parity;
-      }
-    }
-
-    flag_set(&sim->flags, FLAG_AUXILIARY_CARRY, 0); // TODO
-    flag_set(&sim->flags, FLAG_CARRY, 0); // TODO
-    flag_set(&sim->flags, FLAG_OVERFLOW, 0); // TODO
-    flag_set(&sim->flags, FLAG_PARITY, parity); // TODO
-    flag_set(&sim->flags, FLAG_SIGN, 0x8000 & value);
-    flag_set(&sim->flags, FLAG_ZERO, value == 0);
+    register_set(sim, reg, result);
   } break;
 
   case OP_CODE_CMP: {
-    u16 src_value = 0;
+    s16 src_value = 0;
 
     if (instruction.source.kind == OPERAND_KIND_REGISTER) {
       src_value = register_get(sim, instruction.source.reg);
@@ -747,23 +886,8 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
     }
 
     register_t dest = instruction.dest.reg;
-    u16 dest_val = register_get(sim, dest);
-    u16 value = dest_val - src_value;
-
-    // NOTE(cg): parity flag is only set on last 8 bits
-    b32 parity = 1;
-    for (u8 i = 8; i < 16; i += 1) {
-      if ((value >> i) & 1) {
-        parity = ~parity;
-      }
-    }
-
-    flag_set(&sim->flags, FLAG_AUXILIARY_CARRY, 0); // TODO
-    flag_set(&sim->flags, FLAG_CARRY, 0); // TODO
-    flag_set(&sim->flags, FLAG_OVERFLOW, 0); // TODO
-    flag_set(&sim->flags, FLAG_PARITY, parity); // TODO
-    flag_set(&sim->flags, FLAG_SIGN, 0x8000 & value);
-    flag_set(&sim->flags, FLAG_ZERO, value == 0);
+    before = register_get(sim, dest);
+    result = before - src_value;
   } break;
 
   case OP_CODE_NONE:
@@ -797,5 +921,7 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
                               STRING_FMT(op_code_names[instruction.opcode]));
   } break;
   }
+
+  set_flags(sim, instruction, result, before);
 }
 
