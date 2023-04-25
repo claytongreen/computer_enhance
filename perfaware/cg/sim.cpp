@@ -2,6 +2,23 @@
 #include "instruction.h"
 #include "string.h"
 
+// #include <string.h> // memset
+
+static u32 sim_error_buffer_size = 4096;
+
+#define SIM_ERROR(s, x, ...) do { \
+  if (!(s)->error.data) { \
+    (s)->error.data = (u8 *)malloc(sim_error_buffer_size); \
+  } else { \
+    memset((s)->error.data, 0, sim_error_buffer_size); \
+  } \
+  arena_temp_t temp = arena_temp_begin((s)->arena); \
+  string_t file = STRING_LIT(__FILE__); \
+  string_list_t parts = string_split((s)->arena, file, '\\'); \
+  (s)->error.length = sprintf((char * const)(s)->error.data, "ERROR: %.*s:%d: " x, STRING_FMT(parts.last->string), __LINE__, __VA_ARGS__); \
+  fprintf(stderr, "%.*s\n", STRING_FMT((s)->error)); \
+  arena_temp_end(temp); \
+} while(0)
 
 enum flag_set_kind_t {
   FLAG_SET_KIND_ZERO = 0,
@@ -141,8 +158,7 @@ static void register_set(simulator_t *sim, register_t reg, u16 value) {
     u16 *p16 = (u16 *)p;
     *p16 = value;
   } else {
-    sim->registers[map.index] = (sim->registers[map.index] & ~map.mask) |
-                                ((value << map.shift) & map.mask);
+    sim->registers[map.index] = (sim->registers[map.index] & ~map.mask) | ((value << map.shift) & map.mask);
   }
 }
 
@@ -207,8 +223,8 @@ static operand_t next_address(string_t *instruction_stream, u8 w, u8 mod, u8 rm)
 
 static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   string_t instruction_stream = { 0 };
-  instruction_stream.data = sim->instruction_stream.data + offset;
-  instruction_stream.length = sim->instruction_stream.length - offset;
+  instruction_stream.data = sim->memory + offset;
+  instruction_stream.length = sim->code_end - sim->memory;
 
   instruction_t result = {};
   result.ip = instruction_stream.data;
@@ -276,7 +292,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       break;
 
     default:
-      sim->error = string_pushf("\n!!! Unexpected opcode 0x%x\n", b1);
+      SIM_ERROR(sim, "Unexpected opcode 0x%x", b1);
       break;
     }
 
@@ -315,7 +331,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       break;
 
     default:
-      sim->error = string_pushf("\n!!! Unexpected opcode 0x%02x\n", b1);
+      SIM_ERROR(sim, "Unexpected opcode 0x%02x", b1);
       break;
     }
     operand_t dest = {OPERAND_KIND_REGISTER};
@@ -333,7 +349,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       break;
 
     default:
-      sim->error = string_pushf("\n!!! Unexpected dest 0x%02x\n", b1);
+      SIM_ERROR(sim, "Unexpected dest 0x%02x", b1);
       break;
     }
 
@@ -452,7 +468,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
 
     s8 label_index = -1;
 
-    size_t label_ip = (instruction_stream.data - sim->instruction_stream.data) + inc;
+    size_t label_ip = (instruction_stream.data - sim->memory) + inc;
     if (sim->label_count < LABEL_COUNT_MAX) { // have space for more labels
       // look for existing label
       for (size_t i = 0; i < sim->label_count; i += 1) {
@@ -463,12 +479,12 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       }
 
       if (label_index == -1) {
-        string_t label = string_pushf("label%d", label_ip);
+        string_t label = string_pushf(sim->arena, "label%d", label_ip);
         label_index = sim->label_count++;
         sim->labels[label_index] = {label_ip, label};
       }
     } else {
-      sim->error = STRING_LIT("Too many labels");
+      SIM_ERROR(sim, "Too many labels");
     }
 
     // TODO: Is there a nice way to map this?
@@ -535,7 +551,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       break;
 
     default:
-      sim->error = string_pushf("\n!!! Unexpected opcode 0x%02x\n", b1);
+      SIM_ERROR(sim, "Unexpected opcode 0x%02x", b1);
       break;
     }
 
@@ -565,22 +581,22 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       result.opcode = OP_CODE_ADD;
       break;
     case 1:
-      sim->error = STRING_LIT("Invalid op: 1");
+      SIM_ERROR(sim, "Invalid op: 1");
       break;
     case 2:
-      sim->error = STRING_LIT("TODO: adc");
+      SIM_ERROR(sim, "TODO: adc");
       break;
     case 3:
-      sim->error = STRING_LIT("TODO: sbb");
+      SIM_ERROR(sim, "TODO: sbb");
       break;
     case 4:
-      sim->error = STRING_LIT("Invalid op: 4");
+      SIM_ERROR(sim, "Invalid op: 4");
       break;
     case 5:
       result.opcode = OP_CODE_SUB;
       break;
     case 6:
-      sim->error = STRING_LIT("Invalid op: 6");
+      SIM_ERROR(sim, "Invalid op: 6");
       break;
     case 7:
       result.opcode = OP_CODE_CMP;
@@ -684,6 +700,13 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
     result.source = source;
   } break;
 
+  case 0xCC: // INT 3
+  {
+    result.opcode = OP_CODE_INT;
+    result.dest.kind = OPERAND_KIND_IMMEDIATE;
+    result.dest.immediate = 3;
+  } break;
+
   case 0xC6: // MOV b,i,r/m
   case 0xC7: // MOV w,i,r/m
   {
@@ -732,12 +755,12 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       // case 4: break; // JMP  REG16/MEM16 (intersegment)
       // case 7: assert(false); break; // (not used)
     } else {
-      sim->error = string_pushf("Unexpected op: 0b%.*s", 3, &bit_string_u8(op)[6]);
+      SIM_ERROR(sim, "Unexpected op: 0b%.*s", 3, &bit_string_u8(op)[6]);
     }
   } break;
 
   default:
-    sim->error = string_pushf("Unexpected instruction 0b%s", bit_string_u8(b1));
+    SIM_ERROR(sim, "Unexpected instruction 0b%s", bit_string_u8(b1));
     break;
   }
 
@@ -754,11 +777,11 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
 }
 
 static void flag_set(u16 *flags, flag_t flag, b32 value) {
-  if (value) *flags |=  flag;
-  else       *flags &= ~flag;
+  if (value) *flags |=  (1 << flag);
+  else       *flags &= ~(1 << flag);
 }
 
-static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u16 before) {
+static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u16 dst, u16 src) {
   flag_set_t flags = instruction_flags[instruction.opcode];
 
   for (u32 i = 0; i < flags.flag_count; i += 1) {
@@ -769,21 +792,19 @@ static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u
     if (kind == FLAG_SET_KIND_RESULT) {
       flag_result = 0;
 
-      if (flag & FLAG_CARRY) {
-        // TODO
+      if (flag == FLAG_CARRY) {
         b32 carry = 0;
-        // if (instruction.flags & INSTRUCTION_FLAG_WIDE) {
-          b32 a = (before >> 15) & 1;
-          b32 b = (result >> 15) & 1;
-          carry = a && !b;
-        // } else {
-        //   b32 a = ((before & 0xff) >> 7) & 1;
-        //   b32 b = ((result & 0xff) >> 7) & 1;
-        //   carry = a && !b;
-        // }
+
+        if (instruction.opcode == OP_CODE_ADD) {
+          carry = (dst & 0x8000) && !(result & 0x8000);
+        } else if (instruction.opcode == OP_CODE_SUB || instruction.opcode == OP_CODE_CMP) {
+          carry = !(dst & 0x8000) && (result & 0x8000);
+        } else {
+          SIM_ERROR(sim, "Unexpected opcode %.*s when setting CF", STRING_FMT(op_code_names[instruction.opcode]));
+        }
 
         flag_result = carry;
-      } else if (flag & FLAG_PARITY) {
+      } else if (flag == FLAG_PARITY) {
         b32 parity = 1;
         s8 check = (s8)(result & 0xFF);
         for (u8 i = 0; i < 8; i += 1) {
@@ -793,26 +814,60 @@ static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u
         }
 
         flag_result = parity;
-      } else if (flag & FLAG_AUXILIARY_CARRY) {
+      } else if (flag == FLAG_AUXILIARY_CARRY) {
         b32 aux = 0;
 
-        // TODO: not quite right...
-#define HI(x) (((x) >> 8) & 1)
-#define LO(x) (((x) >> 7) & 1)
-        aux = (LO(before) && HI(result)) || (HI(before) && LO(result));
-#undef HI
-#undef LO
+        switch (instruction.opcode) {
+        case OP_CODE_ADD:
+        case OP_CODE_INC:
+          aux = ((dst & 0xF) + (src & 0xF)) > 0xf;
+          break;
+
+        case OP_CODE_SUB:
+        case OP_CODE_CMP:
+        case OP_CODE_DEC:
+          aux = ((dst & 0xF) < (src & 0xF));
+          break;
+
+        case OP_CODE_NONE:
+        case OP_CODE_JA:
+        case OP_CODE_JB:
+        case OP_CODE_JBE:
+        case OP_CODE_JCXZ:
+        case OP_CODE_JE:
+        case OP_CODE_JG:
+        case OP_CODE_JL:
+        case OP_CODE_JLE:
+        case OP_CODE_JNB:
+        case OP_CODE_JNL:
+        case OP_CODE_JNO:
+        case OP_CODE_JNP:
+        case OP_CODE_JNS:
+        case OP_CODE_JNZ:
+        case OP_CODE_JO:
+        case OP_CODE_JP:
+        case OP_CODE_JS:
+        case OP_CODE_LOOP:
+        case OP_CODE_LOOPNZ:
+        case OP_CODE_LOOPZ:
+        case OP_CODE_MOV:
+        case OP_CODE_XCHG:
+        case OP_CODE_POP:
+        case OP_CODE_PUSH:
+        case OP_CODE_COUNT:
+          SIM_ERROR(sim, "Unexpected opcode \"%.*s\" when setting AF", STRING_FMT(op_code_names[instruction.opcode]));
+          break;
+        }
 
         flag_result = aux;
-      } else if (flag & FLAG_ZERO) {
-        b32 zero = result == 0;
+      } else if (flag == FLAG_ZERO) {
+        b32 zero = (result == 0);
         flag_result = zero;
-      } else if (flag & FLAG_SIGN) {
-        b32 sign = 0x8000 & result;
+      } else if (flag == FLAG_SIGN) {
+        b32 sign = (0x8000 & result);
         flag_result = sign;
-      } else if (flag & FLAG_OVERFLOW) {
-        // TODO: not quite right...
-        b32 overflow = ((before >> 15) & 1) != ((result >> 15) & 1);
+      } else if (flag == FLAG_OVERFLOW) {
+        b32 overflow = (dst & 0x8000) != (result & 0x8000);
         flag_result = overflow;
       }
     }
@@ -824,24 +879,29 @@ static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u
 // NOTE(cg): comments showing current regsiter state always reference full 16bit register, never high/low portion
 // TODO: return next IP?
 static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
-  u16 result = 0;
-  u16 before = 0;
+  u32 ip = sim->ip + instruction.bytes_count;
+
+  u16 dst_val = 0;
+  u16 src_val = 0;
+  u16 res_val = 0;
 
   switch (instruction.opcode) {
   case OP_CODE_MOV: {
     register_t reg = instruction.dest.reg;
 
+    dst_val = register_get(sim, reg);
+
     // MOV ax, 1
     if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
-      result = instruction.source.immediate;
-      register_set(sim, reg, result);
+      res_val = instruction.source.immediate;
+      register_set(sim, reg, res_val);
     }
     // MOV ax, bx
     else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
-      result = register_get(sim, instruction.source.reg);
-      register_set(sim, reg, result);
+      res_val = register_get(sim, instruction.source.reg);
+      register_set(sim, reg, res_val);
     } else {
-      sim->error = STRING_LIT("ERROR: simulate: Unhandled MOV");
+      SIM_ERROR(sim, "ERROR: simulate: Unhandled MOV");
       break;
     }
   } break;
@@ -850,44 +910,42 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
   case OP_CODE_SUB: {
     register_t reg = instruction.dest.reg;
 
-    s16 src_value = 0;
-
     // ADD, SUB ax, 1
     if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
-      src_value = instruction.source.immediate;
+      src_val = instruction.source.immediate;
     }
     // ADD, SUB ax, bx
     else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
-      src_value = register_get(sim, instruction.source.reg);
+      src_val = register_get(sim, instruction.source.reg);
     } else {
-      sim->error = STRING_LIT("ERROR: simulate: unhandled SUB");
+      SIM_ERROR(sim, "ERROR: simulate: unhandled SUB");
       break;
     }
 
-    before = register_get(sim, reg);
-    result = before;
+    dst_val = register_get(sim, reg);
+    res_val = dst_val;
     if (instruction.opcode == OP_CODE_ADD) {
-      result += src_value;
+      res_val += src_val;
     } else {
-      result -= src_value;
+      res_val -= src_val;
     }
 
-    register_set(sim, reg, result);
+    register_set(sim, reg, res_val);
   } break;
 
   case OP_CODE_CMP: {
     s16 src_value = 0;
 
     if (instruction.source.kind == OPERAND_KIND_REGISTER) {
-      src_value = register_get(sim, instruction.source.reg);
+      src_val = register_get(sim, instruction.source.reg);
     } else {
-      sim->error = STRING_LIT("ERROR: simulate: unhandled CMP");
+      SIM_ERROR(sim, "ERROR: simulate: unhandled CMP");
       break;
     }
 
     register_t dest = instruction.dest.reg;
-    before = register_get(sim, dest);
-    result = before - src_value;
+    dst_val = register_get(sim, dest);
+    res_val = dest - src_val;
   } break;
 
   case OP_CODE_NONE:
@@ -917,11 +975,40 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
   case OP_CODE_POP:
   case OP_CODE_PUSH:
   case OP_CODE_COUNT: {
-    sim->error = string_pushf("ERROR: simulate: unhandled opcode: %.*s",
-                              STRING_FMT(op_code_names[instruction.opcode]));
+    SIM_ERROR(sim, "ERROR: simulate: unhandled opcode: %.*s", STRING_FMT(op_code_names[instruction.opcode]));
   } break;
   }
 
-  set_flags(sim, instruction, result, before);
+  set_flags(sim, instruction, res_val, dst_val, src_val);
+
+  sim->ip = ip;
+}
+
+void sim_load(simulator_t *sim, string_t obj) {
+  // "load" the program into memory
+  memcpy(sim->memory, obj.data, obj.length);
+  sim->memory[obj.length] = 0xcc;
+  // TODO: what's a better way to do this?
+  sim->code_end = sim->memory + obj.length;
+}
+
+void sim_step(simulator_t *sim) {
+  instruction_t instruction = instruction_decode(sim, sim->ip);
+  instruction_simulate(sim, instruction);
+}
+
+void sim_reset(simulator_t *sim) {
+  sim->ip = 0;
+  sim->error.length = 0;
+
+  arena_reset(sim->arena);
+
+  // TODO: how to clear memory but not clear  loaded asm?
+  // memset(sim->memory, 0xCC, 1024 * 1024);
+
+  for (s32 i = 0; i < 8; i += 1) {
+    sim->registers[i] = 0;
+  }
+  sim->flags = 0;
 }
 

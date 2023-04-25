@@ -2,6 +2,9 @@
 #define _TYPES_H
 
 #include <stdint.h>
+#include <stdio.h>
+#include <intrin.h> // malloc
+#include <string.h> // memset
 
 #define assert(Cond)                                                           \
   do {                                                                         \
@@ -16,7 +19,16 @@ typedef uint16_t u16;
 typedef int16_t s16;
 typedef uint32_t u32;
 typedef int32_t s32;
+typedef uint64_t u64;
+typedef int64_t s64;
 
 typedef int32_t b32;
+
+
+#define KB(x) ((x) << 10)
+#define MB(x) ((x) << 20)
+#define GB(x) ((x) << 30)
+#define TB(x) ((x) << 40)
+
 
 #endif // _TYPES_H

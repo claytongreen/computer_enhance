@@ -8,12 +8,14 @@
 #include "string.h"
 #include "instruction.h"
 #include "sim.h"
+#include "os.h"
 
 #include "mem.cpp" // TODO: proper area allocator
 #include "string.cpp"
 #include "instruction.cpp"
 #include "sim.cpp"
 #include "printer.cpp"
+#include "os.cpp"
 
 static string_t read_entire_file(char *filename);
 
@@ -156,7 +158,7 @@ int main(int argc, char **argv) {
   }
 
   // Print the stuff
-  string_list_t parts = string_split(string_cstring(filepath), '\\');
+string_list_t parts = string_split(string_cstring(filepath), '\\');
   string_t filename = parts.last->string;
 
   if (simulate) {
@@ -220,27 +222,5 @@ int main(int argc, char **argv) {
   }
 
   return sim.error.length;
-}
-
-
-// 
-// OS -------------------------------------------------------------------------
-//
-
-static string_t read_entire_file(char *filename) {
-  string_t result = {};
-
-  FILE *file = fopen(filename, "rb");
-  if (file != NULL) {
-    size_t bytes_read = fread(global_memory, 1, global_memory_size, file);
-    if (bytes_read) {
-      result.data = global_memory;
-      result.length = bytes_read;
-      global_memory += bytes_read;
-    }
-    fclose(file);
-  }
-
-  return result;
 }
 

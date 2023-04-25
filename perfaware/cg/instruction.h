@@ -39,10 +39,12 @@ enum op_code_t : u8 {
   OP_CODE_POP,
   OP_CODE_PUSH,
   OP_CODE_SUB,
+  OP_CODE_INT,
   // ---------------------------------------------------------------------------
   OP_CODE_COUNT,
 };
 
+// TODO: How to better handle H/L
 enum register_t : u8 {
   REGISTER_NONE,
   // ---------------------------------------------------------------------------
@@ -148,6 +150,7 @@ static string_t op_code_names[OP_CODE_COUNT] = {
     STRING_LIT("pop"),
     STRING_LIT("push"),
     STRING_LIT("sub"),
+    STRING_LIT("int"),
 };
 
 static string_t register_names[REGISTER_COUNT] = {

@@ -1,2 +1,3 @@
 bits 16
-add cx, -90
+
+sub bx, 5000 

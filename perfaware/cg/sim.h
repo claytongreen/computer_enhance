@@ -14,18 +14,21 @@ struct label_t {
 #define LABEL_COUNT_MAX 4
 struct simulator_t {
   u16 registers[8];
+
   u16 flags;
 
   u8 *memory;
+  u8 *code_end;
 
   u32 ip;
-  string_t instruction_stream;
 
   // TODO: remove? just for pretty printing
   u32 label_count;
   label_t labels[LABEL_COUNT_MAX];
 
   string_t error;
+
+  arena_t *arena;
 };
 
 struct register_map_t {
@@ -39,16 +42,34 @@ struct register_map_t {
 
 enum flag_t : u16 {
   // status flags
-  FLAG_CARRY            = 1 << 0,
-  FLAG_PARITY           = 1 << 1,
-  FLAG_AUXILIARY_CARRY  = 1 << 2,
-  FLAG_ZERO             = 1 << 3,
-  FLAG_SIGN             = 1 << 4,
-  FLAG_OVERFLOW         = 1 << 5,
+  FLAG_CARRY,
+  FLAG_PARITY,
+  FLAG_AUXILIARY_CARRY,
+  FLAG_ZERO,
+  FLAG_SIGN,
+  FLAG_OVERFLOW,
   // control flags
-  FLAG_INTERRUPT_ENABLE = 1 << 6,
-  FLAG_DIRECTION        = 1 << 7,
-  FLAG_TRAP             = 1 << 8,
+  FLAG_INTERRUPT_ENABLE,
+  FLAG_DIRECTION,
+  FLAG_TRAP,
+  // ---------------------------------------------------------------------------
+  FLAG_COUNT,
 };
+
+static string_t flag_names[FLAG_COUNT] = {
+  STRING_LIT("CF"),
+  STRING_LIT("PF"),
+  STRING_LIT("AF"),
+  STRING_LIT("ZF"),
+  STRING_LIT("SF"),
+  STRING_LIT("OF"),
+  // ---------------------------------------------------------------------------
+  STRING_LIT("Interrupt Enable"),
+  STRING_LIT("Direction"),
+  STRING_LIT("Trap"),
+};
+
+
+void sim_reset(simulator_t *sim);
 
 #endif // _SIM_H
