@@ -16,6 +16,12 @@ struct ui_t {
 
   s8 max_instruction_width;
 
+  b32 opening;
+  u8 **files;
+  u64 files_count;
+
+  u64 load_file_index;
+
   arena_t *frame_arena;
   arena_t *arena;
 };
@@ -270,11 +276,56 @@ static void draw(simulator_t *sim, ui_t *ui) {
   draw_flags(sim);
   draw_memory(sim);
 
+  {
+    char *text = "Load...";
+    float width = (float)GetTextWidth(text);
+    Rectangle button_rect = {
+      screen_width - width - TEXT_PADDING * 3,
+      screen_height - TEXT_SIZE - TEXT_PADDING * 3,
+      width + TEXT_PADDING * 2,
+      TEXT_SIZE + TEXT_PADDING * 2,
+    };
+    if (GuiButton(button_rect, text)) {
+      ui->opening = 1;
+    }
+
+    if (ui->opening) {
+      float window_width = 600;
+      float window_height = 500;
+      Rectangle window_rect = {
+        button_rect.x + button_rect.width - window_width,
+        button_rect.y + button_rect.height - window_height,
+        window_width,
+        window_height,
+      };
+      text = (char *)TextFormat("Load... %d", ui->files_count);
+      if (GuiWindowBox(window_rect, text)) {
+        ui->opening = 0;
+      }
+
+      Rectangle list_rect = {
+        window_rect.x,
+        window_rect.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT,
+        window_rect.width,
+        window_rect.height - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT,
+      };
+
+      if (ui->files_count) {
+        static int scroll_index;
+        static int active = -1;
+        static int focus;
+        active = GuiListViewEx(list_rect, (const char **)ui->files, ui->files_count, &focus, &scroll_index, active);
+        if (active != -1) {
+          ui->opening = 0;
+          ui->load_file_index = active;
+          active = -1;
+        }
+      }
+    }
+  }
+
   // error
   if (sim->error.length) {
-    int screen_width = GetScreenWidth();
-    int screen_height = GetScreenHeight();
-
     const char *text = TextFormat("%.*s", STRING_FMT(sim->error));
     int error_width = GetTextWidth(text);
 

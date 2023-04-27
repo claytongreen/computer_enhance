@@ -29,7 +29,7 @@ string_t string_cstring(arena_t *arena, const char *s);
 
 void          string_list_push(arena_t *arena, string_list_t *list, string_t string);
 string_list_t string_split(arena_t *arena, string_t string, u8 split);
-string_t      string_list_join(arena_t *arena, string_list_t *list);
+string_t      string_list_join(arena_t *arena, string_list_t *list, string_t sep);
 
 string_t string_pushfv(arena_t *arena, const char *fmt, va_list args);
 string_t string_pushf(arena_t *arena, const char *fmt, ...);

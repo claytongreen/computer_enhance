@@ -108,6 +108,47 @@ int main(void) {
       UnloadDroppedFiles(files);
     }
 
+    if (ui.opening && !ui.files_count) {
+      FilePathList files = LoadDirectoryFiles("../part1");
+
+      string_list_t names = {};
+
+      for (u32 i = 0; i < files.count; i += 1) {
+        char *path = files.paths[i];
+
+        string_list_t path_parts = string_split(ui.frame_arena, string_cstring(ui.frame_arena, path), '/');
+        string_t filename = path_parts.last->string;
+        string_list_t name_and_extension = string_split(ui.frame_arena, filename, '.');
+        if (name_and_extension.node_count == 1) {
+          string_t name = name_and_extension.first->string;
+          string_list_push(ui.frame_arena, &names, name);
+        }
+      }
+
+      u32 files_i = 0;
+      ui.files = PUSH_ARRAY(ui.arena, u8 *, names.node_count);
+      ui.files_count = names.node_count;
+
+      u8 *mem = PUSH_ARRAY(ui.arena, u8, names.total_length + names.node_count);
+      for (string_list_node_t *node = names.first; node; node = node->next) {
+        string_t s = node->string;
+
+        memcpy(mem, s.data, s.length);
+
+        ui.files[files_i++] = mem;
+        mem += s.length +1;
+      }
+
+      UnloadDirectoryFiles(files);
+    }
+
+    if (ui.load_file_index) {
+      char path[256];
+      sprintf(path, "../part1/%s", ui.files[ui.load_file_index]);
+      ui_load_file(&sim, &ui, path);
+      ui.load_file_index = 0;
+    }
+
     // RENDER
     if (should_draw) {
       // should_draw = 0;

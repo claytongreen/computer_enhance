@@ -58,20 +58,27 @@ static string_list_t string_split(arena_t *arena, string_t string, u8 split) {
   return result;
 }
 
-static string_t string_list_join(arena_t *arena, string_list_t* list) {
+static string_t string_list_join(arena_t *arena, string_list_t* list, string_t join) {
   // TODO: handle putting things in between list parts
-  size_t length = list->total_length;
+  u64 length = list->total_length;
+  if (join.length) {
+    length += (list->node_count - 1) * join.length;
+  }
 
   string_t result = {};
   result.data   = PUSH_ARRAY(arena, uint8_t, length);
   result.length = length;
 
-  uint8_t* at = result.data;
+  u8 *at = result.data;
   for (string_list_node_t *node = list->first; node != 0; node = node->next) {
     string_t part = node->string;
     memcpy(at, part.data, part.length);
     at += part.length;
-  }
+    if (node->next) {
+      memcpy(at, join.data, join.length);
+      at += join.length;
+    }
+ }
 
   return result;
 }

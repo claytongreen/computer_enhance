@@ -40,7 +40,7 @@ static string_t operand_print(arena_t *arena, simulator_t *sim, u32 instruction_
       }
     }
     string_list_push(arena, &sb, STRING_LIT("]"));
-    result = string_list_join(arena, &sb);
+    result = string_list_join(arena, &sb, {});
   } break;
   case OPERAND_KIND_LABEL: {
     label_t label = sim->labels[operand.label_index];
@@ -84,6 +84,6 @@ static string_t print_flags(arena_t *arena, u16 flags) {
   if (flags & FLAG_DIRECTION)        string_list_push(arena, &sb, STRING_LIT("D"));
   if (flags & FLAG_OVERFLOW)         string_list_push(arena, &sb, STRING_LIT("O"));
 
-  return string_list_join(arena, &sb);
+  return string_list_join(arena, &sb, {});
 }
 
