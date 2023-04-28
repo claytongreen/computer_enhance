@@ -990,6 +990,8 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
 
     if (instruction.source.kind == OPERAND_KIND_REGISTER) {
       src_val = register_get(sim, instruction.source.reg);
+    } else if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
+      src_val = instruction.source.immediate;
     } else {
       SIM_ERROR(sim, "ERROR: simulate: unhandled CMP");
       break;

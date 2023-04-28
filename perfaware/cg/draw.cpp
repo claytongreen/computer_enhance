@@ -324,6 +324,25 @@ static void draw(simulator_t *sim, ui_t *ui) {
     }
   }
 
+  if (true) {
+    static RenderTexture2D texture = LoadRenderTexture(64, 64);
+    if (IsRenderTextureReady(texture)) {
+      u8 *p = sim->memory + 256;
+      UpdateTexture(texture.texture, p);
+      float x = (screen_width / 2.0f) + 1.0f;
+      float y = (screen_height / 2.0f) + 1.0f;
+      float w = screen_width - x;
+      float h = screen_height - y;
+      if (w > h) {
+        w = h;
+      } else {
+        h = w;
+      }
+      // DrawTexture(texture.texture, x, y, WHITE);
+      DrawTexturePro(texture.texture, { 0, 0, 64, 64 }, { x, y, w, h }, { 0, 0 }, 0, WHITE);
+    }
+  }
+
   // error
   if (sim->error.length) {
     const char *text = TextFormat("%.*s", STRING_FMT(sim->error));
