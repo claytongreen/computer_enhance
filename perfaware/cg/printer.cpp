@@ -6,12 +6,12 @@
 static string_t operand_print(arena_t *arena, simulator_t *sim, instruction_t instruction, operand_t operand) {
   string_t result = {0};
 
+  u32 instruction_flags = instruction.flags;
+
   switch (operand.kind) {
   case OPERAND_KIND_IMMEDIATE: {
-    u32 instruction_flags = instruction.flags;
     u32 instruction_size = instruction.bytes_count;
 
-    // TODO: when to print byte/word
     if (instruction_flags & INSTRUCTION_FLAG_JUMP) {
       s8 inc = (s8)operand.immediate;
       inc += instruction_size;
@@ -29,6 +29,12 @@ static string_t operand_print(arena_t *arena, simulator_t *sim, instruction_t in
     address_t addr = operand.address;
 
     string_list_t sb = {0};
+
+    if (instruction_flags & INSTRUCTION_FLAG_SPECIFY_SIZE) {
+      string_t size = (instruction_flags & INSTRUCTION_FLAG_WIDE) ? STRING_LIT("word ") : STRING_LIT("byte ");
+      string_list_push(arena, &sb, size);
+    }
+
     string_list_push(arena, &sb, STRING_LIT("["));
     if (addr.register_count > 0) {
       string_t reg = register_names[addr.registers[0]];

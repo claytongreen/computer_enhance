@@ -97,11 +97,11 @@ struct operand_t {
 
 // TODO: flags: lock, rep, segment, wide, far
 enum instruction_flag_t : u8 {
-  INSTRUCTION_FLAG_SIGN_EXTEND = 1 << 0,
-  INSTRUCTION_FLAG_WIDE        = 1 << 1,
-  INSTRUCTION_FLAG_DEST        = 1 << 2,
+  INSTRUCTION_FLAG_SIGN_EXTEND  = 1 << 0,
+  INSTRUCTION_FLAG_WIDE         = 1 << 1,
+  INSTRUCTION_FLAG_SPECIFY_SIZE = 1 << 2,
   // TODO: this feels wrong...
-  INSTRUCTION_FLAG_JUMP        = 1 << 3,
+  INSTRUCTION_FLAG_JUMP         = 1 << 3,
 };
 
 #define INSTRUCTION_MAX_BYTE_COUNT 6

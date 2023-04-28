@@ -149,6 +149,20 @@ static void init_register_map() {
   register_map[REGISTER_NONE] = {0, -1};
 }
 
+static u16 register_get(simulator_t *sim, register_t reg) {
+  u16 result = 0;
+
+  register_map_t map = register_map[register_remap[reg]];
+
+  if (map.memory_pointer) {
+    result = *(u16 *)(sim->memory + map.index);
+  } else {
+    result = (sim->registers[map.index] & map.mask) >> map.shift;
+  }
+
+  return result;
+}
+
 static void register_set(simulator_t *sim, register_t reg, u16 value) {
   register_map_t map = register_map[reg];
   assert(map.index != -1 && "TODO: handle register_set");
@@ -162,18 +176,26 @@ static void register_set(simulator_t *sim, register_t reg, u16 value) {
   }
 }
 
-static u16 register_get(simulator_t *sim, register_t reg) {
-  u16 result = 0;
-
-  register_map_t map = register_map[register_remap[reg]];
-
-  if (map.memory_pointer) {
-    result = *(u16 *)(sim->memory + map.index);
-  } else {
-    result = (sim->registers[map.index] & map.mask) >> map.shift;
+static u16 address_get(simulator_t *sim, address_t addr) {
+  u8 *p = sim->memory;
+  for (u32 i = 0; i < addr.register_count; i += 1) {
+    register_t reg = addr.registers[i];
+    p += register_get(sim, reg);
   }
+  p += addr.offset;
 
-  return result;
+  return *p;
+}
+
+static void address_set(simulator_t *sim, address_t addr, u16 value) {
+  u8 *p = sim->memory;
+  for (u32 i = 0; i < addr.register_count; i += 1) {
+    register_t reg = addr.registers[i];
+    p += register_get(sim, reg);
+  }
+  p += addr.offset;
+
+  *p = value;
 }
 
 static u8 next_byte(string_t *instruction_stream) {
@@ -700,16 +722,19 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
     // TODO: op?
     u8 rm = (b2 >> 0) & 7;
 
-    operand_t op_addr = next_address(&instruction_stream, w, mod, rm);
+    operand_t dest = next_address(&instruction_stream, w, mod, rm);
     u16 data = next_data16(&instruction_stream, w, 0);
 
     result.opcode = OP_CODE_MOV;
 
-    result.dest = op_addr;
+    result.dest = dest;
 
     result.source.kind = OPERAND_KIND_IMMEDIATE;
     result.source.immediate = data;
 
+    if (dest.kind == OPERAND_KIND_ADDRESS) {
+      result.flags |= INSTRUCTION_FLAG_SPECIFY_SIZE;
+    }
   } break;
 
   // INC, DEC, CALL id, CALL l id, JMP id, PUSH, -
@@ -875,21 +900,54 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
 
   switch (instruction.opcode) {
   case OP_CODE_MOV: {
-    register_t reg = instruction.dest.reg;
 
-    dst_val = register_get(sim, reg);
+    if (instruction.dest.kind == OPERAND_KIND_REGISTER) {
+      register_t reg = instruction.dest.reg;
+      dst_val = register_get(sim, reg);
 
-    // MOV ax, 1
-    if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
-      res_val = instruction.source.immediate;
+      // MOV ax, 1
+      if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
+        res_val = instruction.source.immediate;
+      }
+      // MOV ax, bx
+      else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
+        res_val = register_get(sim, instruction.source.reg);
+      }
+      // MOV ax, [1000]
+      else if (instruction.source.kind == OPERAND_KIND_ADDRESS) {
+        address_t addr = instruction.source.address;
+        res_val = address_get(sim, addr);
+      } else {
+        SIM_ERROR(sim, "simulate, Unhandled MOV source");
+        break;
+      }
+
       register_set(sim, reg, res_val);
-    }
-    // MOV ax, bx
-    else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
-      res_val = register_get(sim, instruction.source.reg);
-      register_set(sim, reg, res_val);
+
+    } else if (instruction.dest.kind == OPERAND_KIND_ADDRESS) {
+      address_t addr = instruction.dest.address;
+
+      // MOV [1000], 1
+      if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
+        res_val = instruction.source.immediate;
+      }
+      // MOV [1000], bx
+      else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
+        res_val = register_get(sim, instruction.source.reg);
+      }
+      // MOV [1000], [1001]
+      else if (instruction.source.kind == OPERAND_KIND_ADDRESS) {
+        // TODO: POSSIBLE???
+        address_t addr = instruction.source.address;
+        res_val = address_get(sim, addr);
+      } else {
+        SIM_ERROR(sim, "simulate, Unhandled MOV source");
+        break;
+      }
+
+      address_set(sim, addr, res_val);
     } else {
-      SIM_ERROR(sim, "ERROR: simulate: Unhandled MOV");
+      SIM_ERROR(sim, "simulate, unhandled MOV dest");
       break;
     }
   } break;
@@ -898,14 +956,20 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
   case OP_CODE_SUB: {
     register_t reg = instruction.dest.reg;
 
-    // ADD, SUB ax, 1
+    // ADD/SUB ax, 1
     if (instruction.source.kind == OPERAND_KIND_IMMEDIATE) {
       src_val = instruction.source.immediate;
     }
-    // ADD, SUB ax, bx
+    // ADD/SUB ax, bx
     else if (instruction.source.kind == OPERAND_KIND_REGISTER) {
       src_val = register_get(sim, instruction.source.reg);
-    } else {
+    }
+    // ADD/SUB ax, [1000]
+    else if (instruction.source.kind == OPERAND_KIND_ADDRESS) {
+      address_t addr = instruction.source.address;
+      src_val = address_get(sim, addr);
+    }
+    else {
       SIM_ERROR(sim, "ERROR: simulate: unhandled SUB");
       break;
     }

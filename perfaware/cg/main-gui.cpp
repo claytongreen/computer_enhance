@@ -73,9 +73,7 @@ int main(void) {
   sim.memory = PUSH_ARRAY(sim.arena, u8, MB(1));
 
   {
-    // const char *f = "..\\part1\\listing_0047_challenge_flags";
-    // char *f = "..\\part1\\listing_0049_conditional_jumps";
-    char *f = "..\\part1\\listing_0050_challenge_jumps";
+    char *f = "..\\part1\\listing_0054_draw_rectangle";
     ui_load_file(&sim, &ui, f);
   }
 
@@ -88,7 +86,7 @@ int main(void) {
     arena_reset(ui.frame_arena);
 
     // input + update
-    if (running || IsKeyPressed(KEY_F10)) {
+    if ((running || IsKeyPressed(KEY_F10)) && (sim.error.length == 0)) {
       if ((sim.memory + sim.ip) >= sim.code_end) {
         if (!running) {
           sim_reset(&sim);
@@ -96,6 +94,10 @@ int main(void) {
         running = 0;
       } else {
         sim_step(&sim);
+
+        if (sim.error.length) {
+          running = 0;
+        }
       }
 
       should_draw = 1;
