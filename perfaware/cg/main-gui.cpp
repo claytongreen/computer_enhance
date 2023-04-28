@@ -72,7 +72,12 @@ int main(void) {
   sim.arena = arena_create();
   sim.memory = PUSH_ARRAY(sim.arena, u8, MB(1));
 
-  ui_load_file(&sim, &ui, "..\\part1\\listing_0047_challenge_flags");
+  {
+    // const char *f = "..\\part1\\listing_0047_challenge_flags";
+    // char *f = "..\\part1\\listing_0049_conditional_jumps";
+    char *f = "..\\part1\\listing_0050_challenge_jumps";
+    ui_load_file(&sim, &ui, f);
+  }
 
   InitWindow(screen_width, screen_height, "EightyEightSix");
   SetTargetFPS(144);
@@ -95,8 +100,12 @@ int main(void) {
 
       should_draw = 1;
     } else if (IsKeyPressed(KEY_F5)) {
-      sim_reset(&sim);
-      running = 1;
+      if (running) {
+        running = 0;
+      } else {
+        sim_reset(&sim);
+        running = 1;
+      }
     }
 
     if (IsFileDropped()) {

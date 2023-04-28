@@ -72,7 +72,6 @@ enum operand_kind_t : u8 {
   OPERAND_KIND_REGISTER,
   OPERAND_KIND_ADDRESS,
   OPERAND_KIND_IMMEDIATE,
-  OPERAND_KIND_LABEL,
   // ---------------------------------------------------------------------------
   OPERAND_KIND_COUNT,
 };
@@ -93,8 +92,6 @@ struct operand_t {
     u16 immediate;
     register_t reg;
     address_t address;
-
-    u8 label_index;
   };
 };
 
@@ -103,6 +100,8 @@ enum instruction_flag_t : u8 {
   INSTRUCTION_FLAG_SIGN_EXTEND = 1 << 0,
   INSTRUCTION_FLAG_WIDE        = 1 << 1,
   INSTRUCTION_FLAG_DEST        = 1 << 2,
+  // TODO: this feels wrong...
+  INSTRUCTION_FLAG_JUMP        = 1 << 3,
 };
 
 #define INSTRUCTION_MAX_BYTE_COUNT 6

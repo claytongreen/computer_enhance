@@ -6,25 +6,16 @@
 #include "instruction.h"
 
 
-struct label_t {
-  size_t ip;
-  string_t label;
-};
-
-#define LABEL_COUNT_MAX 4
 struct simulator_t {
   u16 registers[8];
 
   u16 flags;
 
   u8 *memory;
+  // TODO: need a better way to mark end of program
   u8 *code_end;
 
   u32 ip;
-
-  // TODO: remove? just for pretty printing
-  u32 label_count;
-  label_t labels[LABEL_COUNT_MAX];
 
   string_t error;
 
@@ -70,6 +61,8 @@ static string_t flag_names[FLAG_COUNT] = {
 };
 
 
+void sim_load(simulator_t *sim, string_t obj);
+void sim_step(simulator_t *sim);
 void sim_reset(simulator_t *sim);
 
 #endif // _SIM_H

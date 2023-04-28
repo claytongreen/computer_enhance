@@ -3,14 +3,21 @@
 #include "sim.h"
 
 
-static string_t operand_print(arena_t *arena, simulator_t *sim, u32 instruction_flags, operand_t operand) {
+static string_t operand_print(arena_t *arena, simulator_t *sim, instruction_t instruction, operand_t operand) {
   string_t result = {0};
 
   switch (operand.kind) {
   case OPERAND_KIND_IMMEDIATE: {
+    u32 instruction_flags = instruction.flags;
+    u32 instruction_size = instruction.bytes_count;
+
     // TODO: when to print byte/word
-    if (instruction_flags & INSTRUCTION_FLAG_SIGN_EXTEND) {
-      result = string_pushf(arena, "%d", operand.immediate);
+    if (instruction_flags & INSTRUCTION_FLAG_JUMP) {
+      s8 inc = (s8)operand.immediate;
+      inc += instruction_size;
+      result = string_pushf(arena, "$%d", (s8)inc);
+    } else if (instruction_flags & INSTRUCTION_FLAG_SIGN_EXTEND) {
+      result = string_pushf(arena, "%d", (s16)operand.immediate);
     } else {
       result = string_pushf(arena, "%d", operand.immediate);
     }
@@ -42,10 +49,6 @@ static string_t operand_print(arena_t *arena, simulator_t *sim, u32 instruction_
     string_list_push(arena, &sb, STRING_LIT("]"));
     result = string_list_join(arena, &sb, {});
   } break;
-  case OPERAND_KIND_LABEL: {
-    label_t label = sim->labels[operand.label_index];
-    result = string_pushf(arena, "%.*s ; %d", STRING_FMT(label.label), label.ip);
-  } break;
 
   case OPERAND_KIND_NONE:
   case OPERAND_KIND_COUNT:
@@ -59,10 +62,10 @@ static string_t instruction_print(arena_t *arena, simulator_t *sim, instruction_
   string_t result;
 
   string_t opcode = op_code_names[instruction.opcode];
-  string_t dest = operand_print(arena, sim, instruction.flags, instruction.dest);
+  string_t dest = operand_print(arena, sim, instruction, instruction.dest);
 
   if (instruction.source.kind != OPERAND_KIND_NONE) {
-    string_t source = operand_print(arena, sim, instruction.flags, instruction.source);
+    string_t source = operand_print(arena, sim, instruction, instruction.source);
     result = string_pushf(arena, "%.*s %.*s, %.*s", STRING_FMT(opcode), STRING_FMT(dest), STRING_FMT(source));
   } else {
     result = string_pushf(arena, "%.*s %.*s", STRING_FMT(opcode), STRING_FMT(dest));

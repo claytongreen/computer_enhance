@@ -190,7 +190,9 @@ static u16 next_data16(string_t *instruction_stream, u8 w, u8 s) {
   u16 data = next_byte(instruction_stream);
 
   if (s && w) {
-    data = -((data ^ 0xFF) + 1);
+    if (data & 0x80) {
+      data |= 0xff00;
+    }
   } else if (w) {
     u8 hi = next_byte(instruction_stream);
     data = (((s16)hi) << 8) | (data & 0xff);
@@ -466,27 +468,6 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   {
     s8 inc = (s8)next_byte(&instruction_stream);
 
-    s8 label_index = -1;
-
-    size_t label_ip = (instruction_stream.data - sim->memory) + inc;
-    if (sim->label_count < LABEL_COUNT_MAX) { // have space for more labels
-      // look for existing label
-      for (size_t i = 0; i < sim->label_count; i += 1) {
-        if (sim->labels[i].ip == label_ip) {
-          label_index = i;
-          break;
-        }
-      }
-
-      if (label_index == -1) {
-        string_t label = string_pushf(sim->arena, "label%d", label_ip);
-        label_index = sim->label_count++;
-        sim->labels[label_index] = {label_ip, label};
-      }
-    } else {
-      SIM_ERROR(sim, "Too many labels");
-    }
-
     // TODO: Is there a nice way to map this?
     switch (b1) {
     case 0x70:
@@ -555,8 +536,10 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
       break;
     }
 
-    result.dest.kind = OPERAND_KIND_LABEL;
-    result.dest.label_index = label_index;
+    result.flags |= INSTRUCTION_FLAG_JUMP;
+
+    result.dest.kind = OPERAND_KIND_IMMEDIATE;
+    result.dest.immediate = inc;
   } break;
 
   case 0x80: // Immed b,r/m
@@ -760,7 +743,7 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   } break;
 
   default:
-    SIM_ERROR(sim, "Unexpected instruction 0b%s", bit_string_u8(b1));
+    SIM_ERROR(sim, "Unexpected instruction 0x%02x 0b%s", b1, bit_string_u8(b1));
     break;
   }
 
@@ -779,6 +762,11 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
 static void flag_set(u16 *flags, flag_t flag, b32 value) {
   if (value) *flags |=  (1 << flag);
   else       *flags &= ~(1 << flag);
+}
+
+static b32 flag_get(u16 flags, flag_t flag) {
+  b32 result = (flags & (1 << flag));
+  return result;
 }
 
 static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u16 dst, u16 src) {
@@ -945,32 +933,79 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
 
     register_t dest = instruction.dest.reg;
     dst_val = register_get(sim, dest);
-    res_val = dest - src_val;
+    res_val = dst_val - src_val;
   } break;
+
+  case OP_CODE_LOOPZ: {
+    u16 cx = register_get(sim, REGISTER_CX);
+    cx -= 1;
+    register_set(sim, REGISTER_CX, cx);
+    if (cx == 0) {
+        break;
+    } else {
+      // FALLTHROUGH
+    }
+  }
+  case OP_CODE_JE: {
+    if (flag_get(sim->flags, FLAG_ZERO)) {
+      s8 inc = (s8)instruction.dest.immediate;
+      ip += inc;
+    }
+  } break;
+  case OP_CODE_LOOPNZ: {
+    u16 cx = register_get(sim, REGISTER_CX);
+    cx -= 1;
+    register_set(sim, REGISTER_CX, cx);
+    if (cx == 0) {
+      break;
+    } else {
+      // FALLTHROUGH
+    }
+  }
+  case OP_CODE_JNZ: {
+    if (!flag_get(sim->flags, FLAG_ZERO)) {
+      s8 inc = (s8)instruction.dest.immediate;
+      ip += inc;
+    }
+  } break;
+
+  case OP_CODE_JP: {
+    if (flag_get(sim->flags, FLAG_PARITY)) {
+      s8 inc = (s8)instruction.dest.immediate;
+      ip += inc;
+    }
+  } break;
+  case OP_CODE_JNP: {
+    if (!flag_get(sim->flags, FLAG_PARITY)) {
+      s8 inc = (s8)instruction.dest.immediate;
+      ip += inc;
+    }
+  } break;
+
+  case OP_CODE_JB: {
+    if (flag_get(sim->flags, FLAG_CARRY)) {
+      s8 inc = (s8)instruction.dest.immediate;
+      ip += inc;
+    }
+  } break;
+
 
   case OP_CODE_NONE:
   case OP_CODE_DEC:
   case OP_CODE_INC:
   case OP_CODE_JA:
-  case OP_CODE_JB:
   case OP_CODE_JBE:
   case OP_CODE_JCXZ:
-  case OP_CODE_JE:
   case OP_CODE_JG:
   case OP_CODE_JL:
   case OP_CODE_JLE:
   case OP_CODE_JNB:
   case OP_CODE_JNL:
   case OP_CODE_JNO:
-  case OP_CODE_JNP:
   case OP_CODE_JNS:
-  case OP_CODE_JNZ:
   case OP_CODE_JO:
-  case OP_CODE_JP:
   case OP_CODE_JS:
   case OP_CODE_LOOP:
-  case OP_CODE_LOOPNZ:
-  case OP_CODE_LOOPZ:
   case OP_CODE_XCHG:
   case OP_CODE_POP:
   case OP_CODE_PUSH:
