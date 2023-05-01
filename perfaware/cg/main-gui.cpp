@@ -13,14 +13,38 @@
 #include "mem.cpp" // TODO: proper area allocator
 #include "string.cpp"
 #include "instruction.cpp"
-#include "sim.cpp"
 #include "printer.cpp"
+#include "sim.cpp"
 #include "os.cpp"
 
 static const int screen_width = 1920;
 static const int screen_height = 1080;
 
 #include "draw.cpp"
+
+static void ui_decode_instructions(simulator_t *sim, ui_t *ui, u32 offset) {
+  u32 instruction_count = 0;
+  s8 max_instruction_width = 0;
+
+  u32 ip = offset;
+  for (;;) {
+    // TODO: more explicit way to define end of program?
+    if ((sim->memory + ip) >= sim->code_end) break;
+
+    instruction_t instruction = instruction_decode(sim, ip);
+
+    ui->instructions[instruction_count++] = instruction;
+
+    ip += instruction.bytes_count;
+
+    if (instruction.bytes_count > max_instruction_width) {
+      max_instruction_width = instruction.bytes_count;
+    }
+  }
+
+  ui->instruction_count = instruction_count;
+  ui->max_instruction_width = max_instruction_width;
+}
 
 static void ui_load_file(simulator_t *sim, ui_t *ui, char *file) {
   sim_reset(sim);
@@ -38,28 +62,62 @@ static void ui_load_file(simulator_t *sim, ui_t *ui, char *file) {
     ui->filename.data = PUSH_ARRAY(ui->arena, u8, ui->filename.length);
     memcpy(ui->filename.data, filename.data, ui->filename.length);
 
-    u32 max_instruction_count = 1000;
-    ui->instructions = PUSH_ARRAY(ui->arena, instruction_t, max_instruction_count);
-    ui->instruction_count = 0;
-    for (;;) {
-      if ((sim->memory + sim->ip) > sim->code_end) break;
-
-      instruction_t instruction = instruction_decode(sim, sim->ip);
-
-      ui->instructions[ui->instruction_count++] = instruction;
-
-      sim->ip += instruction.bytes_count;
-
-      if (instruction.bytes_count > ui->max_instruction_width) {
-        ui->max_instruction_width = instruction.bytes_count;
-      }
-    }
+    ui_decode_instructions(sim, ui, 0);
 
     printf("Loaded %d instructions\n", ui->instruction_count);
   } else {
     SIM_ERROR(sim, "Failed to open file: %.*s", STRING_FMT(filename));
   }
 }
+
+static void ui_step(simulator_t *sim, ui_t *ui, b32 verbose) {
+  arena_temp_t temp = arena_temp_begin(ui->frame_arena);
+  arena_t *arena = temp.arena;
+
+  instruction_t instruction = instruction_decode(sim, sim->ip);
+  if (!sim->error.length) {
+    u32 ip_before = sim->ip;
+    u16 flags_before = sim->flags;
+
+    u16 registers_before[8];
+    for (u32 i = 0; i < 8; i += 1) {
+      registers_before[i] = sim->registers[i];
+    }
+
+    instruction_simulate(sim, instruction);
+
+    if (verbose) {
+      string_list_t sb = {};
+      string_t a = instruction_print(arena, sim, instruction); 
+      string_list_push(arena, &sb, a);
+      string_list_push(arena, &sb, STRING_LIT(" ; "));
+
+      register_t registers[] = { REGISTER_AX, REGISTER_BX, REGISTER_CX, REGISTER_DX, REGISTER_SP, REGISTER_BP, REGISTER_SI, REGISTER_DI };
+      for (u32 i = 0; i < 8; i += 1) {
+        u16 before = registers_before[i];
+        u16 after = sim->registers[i];
+        if (before != after) {
+          register_t reg = registers[i];
+          string_list_pushf(arena, &sb, "%.*s:0x%x->0x%x ", STRING_FMT(register_names[reg]), before, after);
+        }
+      }
+
+      string_list_pushf(arena, &sb, "ip:0x%x->0x%x ", ip_before, sim->ip);
+
+      if (flags_before != sim->flags) {
+        string_t before = print_flags(arena, flags_before);
+        string_t after = print_flags(arena, sim->flags);
+        string_list_pushf(arena, &sb, "flags:%.*s->%.*s ", STRING_FMT(before), STRING_FMT(after));
+      }
+
+      string_t text = string_list_join(arena, &sb, STRING_LIT(""));
+      printf("%.*s\n", STRING_FMT(text));
+    }
+  }
+
+  arena_temp_end(temp);
+}
+
 
 int main(void) {
   init_register_map();
@@ -68,12 +126,15 @@ int main(void) {
   ui.arena = arena_create();
   ui.frame_arena = arena_create();
 
+  u32 max_instruction_count = 1000;
+  ui.instructions = PUSH_ARRAY(ui.arena, instruction_t, max_instruction_count);
+
   simulator_t sim = {};
   sim.arena = arena_create();
   sim.memory = PUSH_ARRAY(sim.arena, u8, MB(1));
 
   {
-    char *f = "..\\part1\\listing_0054_draw_rectangle";
+    char *f = "..\\part1\\listing_0055_challenge_rectangle";
     ui_load_file(&sim, &ui, f);
   }
 
@@ -93,10 +154,17 @@ int main(void) {
         }
         running = 0;
       } else {
-        sim_step(&sim);
+        u32 steps = running ? 10000 : 1;
 
-        if (sim.error.length) {
-          running = 0;
+        while (steps--) {
+          ui_step(&sim, &ui, 0);
+
+          if (sim.error.length || ((sim.memory + sim.ip) >= sim.code_end)) {
+            running = 0;
+            break;
+          }
+
+          ui_decode_instructions(&sim, &ui, 0);
         }
       }
 

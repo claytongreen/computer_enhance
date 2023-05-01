@@ -1,3 +1,3 @@
 bits 16
 
-sub bx, 5000 
+mov byte [bp + 61*64*4 + 1], 255 ; Bottom line

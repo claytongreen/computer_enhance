@@ -62,7 +62,8 @@ static string_t flag_names[FLAG_COUNT] = {
 
 
 void sim_load(simulator_t *sim, string_t obj);
-void sim_step(simulator_t *sim);
 void sim_reset(simulator_t *sim);
+
+instruction_t sim_step(simulator_t *sim);
 
 #endif // _SIM_H

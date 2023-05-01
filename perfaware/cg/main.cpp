@@ -13,8 +13,8 @@
 #include "mem.cpp" // TODO: proper area allocator
 #include "string.cpp"
 #include "instruction.cpp"
-#include "sim.cpp"
 #include "printer.cpp"
+#include "sim.cpp"
 #include "os.cpp"
 
 static string_t read_entire_file(char *filename);

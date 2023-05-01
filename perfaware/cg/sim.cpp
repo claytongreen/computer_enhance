@@ -325,6 +325,11 @@ static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
 
     result.dest = d ? op_register : op_address;
     result.source = d ? op_address : op_register;
+
+    if (result.dest.kind == OPERAND_KIND_ADDRESS) {
+      result.flags |= INSTRUCTION_FLAG_SPECIFY_SIZE;
+    }
+
   } break;
 
   case 0x04: // ADD b,ia
@@ -1002,6 +1007,16 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
     res_val = dst_val - src_val;
   } break;
 
+  case OP_CODE_LOOP: {
+    u16 cx = register_get(sim, REGISTER_CX);
+    cx -= 1;
+    register_set(sim, REGISTER_CX, cx);
+    if (cx != 0) {
+      s8 inc = (s8)instruction.dest.immediate;
+      ip += inc;
+    }
+  } break;
+
   case OP_CODE_LOOPZ: {
     u16 cx = register_get(sim, REGISTER_CX);
     cx -= 1;
@@ -1071,7 +1086,6 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
   case OP_CODE_JNS:
   case OP_CODE_JO:
   case OP_CODE_JS:
-  case OP_CODE_LOOP:
   case OP_CODE_XCHG:
   case OP_CODE_POP:
   case OP_CODE_PUSH:
@@ -1088,14 +1102,22 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
 void sim_load(simulator_t *sim, string_t obj) {
   // "load" the program into memory
   memcpy(sim->memory, obj.data, obj.length);
-  sim->memory[obj.length] = 0xcc;
-  // TODO: what's a better way to do this?
-  sim->code_end = sim->memory + obj.length;
+  // NOTE(cg): stick an "int 3" at the end of the code
+  sim->memory[obj.length + 0] = 0xcc;
+  sim->memory[obj.length + 1] = 0xcc;
+  sim->memory[obj.length + 2] = 0xcc;
+
+  sim->code_end = sim->memory + (obj.length + 2);
 }
 
-void sim_step(simulator_t *sim) {
+instruction_t sim_step(simulator_t *sim) {
   instruction_t instruction = instruction_decode(sim, sim->ip);
-  instruction_simulate(sim, instruction);
+
+  if (!sim->error.length) {
+    instruction_simulate(sim, instruction);
+  }
+
+  return instruction;
 }
 
 void sim_reset(simulator_t *sim) {
@@ -1112,4 +1134,5 @@ void sim_reset(simulator_t *sim) {
   }
   sim->flags = 0;
 }
+
 
