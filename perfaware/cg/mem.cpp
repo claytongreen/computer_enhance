@@ -24,7 +24,7 @@ void *arena_push(arena_t *arena, u64 size) {
 
   assert(arena->pos + size <= arena->cap && "Arena out of memory");
 
-  result = arena + arena->pos;
+  result = (u8 *)arena + arena->pos;
   arena->pos += size;
 
   assert(result != 0 && "Arena failed to allocate");

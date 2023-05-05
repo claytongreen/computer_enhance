@@ -84,7 +84,7 @@ static void draw_instructions(simulator_t *sim, ui_t *ui) {
       x = text_x + address_width + ((ui->max_instruction_width + 1) * byte_width * 1.25);
     }
     { // decoded instruction
-      string_t s = instruction_print(ui->frame_arena, sim, instruction);
+      string_t s = print_instruction(ui->frame_arena, sim, instruction);
       const char *text = TextFormat("%.*s", STRING_FMT(s));
       Color c = current ? RED : BLACK;
       Text(text, x, text_y, c);

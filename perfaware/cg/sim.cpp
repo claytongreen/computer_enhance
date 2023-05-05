@@ -16,9 +16,9 @@ static u32 sim_error_buffer_size = 4096;
   string_t file = STRING_LIT(__FILE__); \
   string_list_t parts = string_split((s)->arena, file, '\\'); \
   (s)->error.length = sprintf((char * const)(s)->error.data, "ERROR: %.*s:%d: " x, STRING_FMT(parts.last->string), __LINE__, __VA_ARGS__); \
-  fprintf(stderr, "%.*s\n", STRING_FMT((s)->error)); \
   arena_temp_end(temp); \
 } while(0)
+  // fprintf(stderr, "%.*s\n", STRING_FMT((s)->error)); \
 
 enum flag_set_kind_t {
   FLAG_SET_KIND_ZERO = 0,
@@ -236,10 +236,114 @@ static operand_t next_address(string_t *instruction_stream, u8 w, u8 mod, u8 rm)
     result.kind = OPERAND_KIND_ADDRESS;
     result.address.registers[0] = effective_address[0][rm];
     result.address.registers[1] = effective_address[1][rm];
-    result.address.register_count = 2;
+    if (result.address.registers[1] != REGISTER_NONE) {
+      result.address.register_count = 2;
+    } else {
+      result.address.register_count = 1;
+    }
     if (mod) {
       result.address.offset = next_data16(instruction_stream, mod == 2 ? 1 : 0, 0);
     }
+  }
+
+  return result;
+}
+
+static u32 ea_estimate_clocks(address_t addr) {
+  u32 result = 0;
+
+  if (addr.register_count == 2) {
+    if (
+      (addr.registers[0] == REGISTER_BP && addr.registers[1] == REGISTER_DI) ||
+      (addr.registers[0] == REGISTER_BX && addr.registers[1] == REGISTER_SI)
+    ) {
+      result = 7;
+    } else if (
+      (addr.registers[0] == REGISTER_BP && addr.registers[1] == REGISTER_SI) ||
+      (addr.registers[0] == REGISTER_BX && addr.registers[1] == REGISTER_DI)
+    ) {
+      result = 8;
+    }
+  } else if (addr.register_count == 1) {
+    result = 5;
+  }
+
+  if (addr.offset) {
+    if (!result) {
+      result = 2;
+    }
+
+    result += 4;
+  }
+
+  return result;
+}
+
+static u32 instruction_estimate_clocks(simulator_t *sim, instruction_t instruction) {
+  u32 result = 0;
+
+  op_code_t opcode = instruction.opcode;
+  operand_t dest = instruction.dest;
+  operand_t source = instruction.source;
+
+  switch (opcode) {
+    case OP_CODE_MOV: {
+      if (dest.kind == OPERAND_KIND_ADDRESS && source.kind == OPERAND_KIND_REGISTER) {
+        if (source.reg == REGISTER_AX || source.reg == REGISTER_AH || source.reg == REGISTER_AL) {
+          result = 10;
+        } else {
+          result = 9;
+          result += ea_estimate_clocks(dest.address);
+        }
+      } else if (dest.kind == OPERAND_KIND_REGISTER && source.kind == OPERAND_KIND_ADDRESS) {
+        if (dest.reg == REGISTER_AX || dest.reg == REGISTER_AH || dest.reg == REGISTER_AL) {
+          result = 10;
+        } else {
+          result = 8;
+          result += ea_estimate_clocks(source.address);
+        }
+      } else if (dest.kind == OPERAND_KIND_REGISTER && source.kind == OPERAND_KIND_REGISTER) {
+        result = 2;
+      } else if (dest.kind == OPERAND_KIND_REGISTER && source.kind == OPERAND_KIND_IMMEDIATE) {
+        result = 4;
+      } else {
+        SIM_ERROR(sim, "Unexpected MOV permutation");
+      }
+
+    } break;
+
+    case OP_CODE_ADD: {
+      if (dest.kind == OPERAND_KIND_REGISTER && source.kind == OPERAND_KIND_REGISTER) {
+        result = 3;
+      } else if (dest.kind == OPERAND_KIND_REGISTER && source.kind == OPERAND_KIND_ADDRESS) {
+        result = 9;
+        result += ea_estimate_clocks(source.address);
+        if (source.address.offset && source.address.offset % 2 != 0) {
+          result += 4;
+        }
+      } else if (dest.kind == OPERAND_KIND_ADDRESS && source.kind == OPERAND_KIND_REGISTER) {
+        result = 16;
+        result += ea_estimate_clocks(dest.address);
+        if (dest.address.offset && dest.address.offset % 2 != 0) {
+          result += 8;
+        }
+      } else if (dest.kind == OPERAND_KIND_REGISTER && source.kind == OPERAND_KIND_IMMEDIATE) {
+        result = 4;
+      } else if (dest.kind == OPERAND_KIND_ADDRESS && source.kind == OPERAND_KIND_IMMEDIATE) {
+        result = 17;
+        result += ea_estimate_clocks(dest.address);
+        if (dest.address.offset && dest.address.offset % 2 != 0) {
+          result += 8;
+        }
+      } else {
+        SIM_ERROR(sim, "Unexpected ADD permutation");
+      }
+
+    } break;
+
+    default: {
+      SIM_ERROR(sim, "Unexpected opcode: %.*s", STRING_FMT(op_code_names[opcode]));
+    } break;
   }
 
   return result;
@@ -1102,6 +1206,8 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
 void sim_load(simulator_t *sim, string_t obj) {
   // "load" the program into memory
   memcpy(sim->memory, obj.data, obj.length);
+
+  // TODO: this should be somewhere else...
   // NOTE(cg): stick an "int 3" at the end of the code
   sim->memory[obj.length + 0] = 0xcc;
   sim->memory[obj.length + 1] = 0xcc;

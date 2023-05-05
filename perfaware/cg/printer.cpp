@@ -3,7 +3,7 @@
 #include "sim.h"
 
 
-static string_t operand_print(arena_t *arena, simulator_t *sim, instruction_t instruction, operand_t operand) {
+static string_t print_operand(arena_t *arena, simulator_t *sim, instruction_t instruction, operand_t operand) {
   string_t result = {0};
 
   u32 instruction_flags = instruction.flags;
@@ -64,14 +64,14 @@ static string_t operand_print(arena_t *arena, simulator_t *sim, instruction_t in
   return result;
 }
 
-static string_t instruction_print(arena_t *arena, simulator_t *sim, instruction_t instruction) {
+static string_t print_instruction(arena_t *arena, simulator_t *sim, instruction_t instruction) {
   string_t result;
 
   string_t opcode = op_code_names[instruction.opcode];
-  string_t dest = operand_print(arena, sim, instruction, instruction.dest);
+  string_t dest = print_operand(arena, sim, instruction, instruction.dest);
 
   if (instruction.source.kind != OPERAND_KIND_NONE) {
-    string_t source = operand_print(arena, sim, instruction, instruction.source);
+    string_t source = print_operand(arena, sim, instruction, instruction.source);
     result = string_pushf(arena, "%.*s %.*s, %.*s", STRING_FMT(opcode), STRING_FMT(dest), STRING_FMT(source));
   } else {
     result = string_pushf(arena, "%.*s %.*s", STRING_FMT(opcode), STRING_FMT(dest));

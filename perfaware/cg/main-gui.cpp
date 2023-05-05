@@ -10,7 +10,7 @@
 #include "sim.h"
 #include "os.h"
 
-#include "mem.cpp" // TODO: proper area allocator
+#include "mem.cpp"
 #include "string.cpp"
 #include "instruction.cpp"
 #include "printer.cpp"
@@ -88,7 +88,7 @@ static void ui_step(simulator_t *sim, ui_t *ui, b32 verbose) {
 
     if (verbose) {
       string_list_t sb = {};
-      string_t a = instruction_print(arena, sim, instruction); 
+      string_t a = print_instruction(arena, sim, instruction); 
       string_list_push(arena, &sb, a);
       string_list_push(arena, &sb, STRING_LIT(" ; "));
 

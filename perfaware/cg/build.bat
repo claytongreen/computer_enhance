@@ -15,7 +15,7 @@ IF NOT EXIST build mkdir build
 pushd build
 
 rem call cl /nologo /Zi /O2 /FC ..\main.cpp /Fedisasm.exe
-rem call cl /nologo /Zi /FC ..\main.cpp /Fedisasm.exe
-call cl /nologo /Zi /FC ..\main-gui.cpp /Fedisasm-gui.exe /link C:\dev\raylib-4.5.0_win64_msvc16\lib\raylibdll.lib
+call cl /nologo /Zi /FC ..\main.cpp /Fedisasm.exe
+rem call cl /nologo /Zi /FC ..\main-gui.cpp /Fedisasm-gui.exe /link C:\dev\raylib-4.5.0_win64_msvc16\lib\raylibdll.lib
 
 popd
