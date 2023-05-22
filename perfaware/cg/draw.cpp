@@ -4,7 +4,6 @@
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
 
-#define ARRAY_COUNT(x) sizeof(x) / sizeof(x[0])
 
 #include "sim.h"
 
@@ -255,6 +254,89 @@ static void draw_flags(simulator_t *sim) {
 }
 
 static void draw_memory(simulator_t *sim) {
+  static RenderTexture2D texture = LoadRenderTexture(64, 64);
+
+  if (IsRenderTextureReady(texture)) {
+    u8 *p = sim->memory + 256;
+    UpdateTexture(texture.texture, p);
+    float x = (screen_width / 2.0f) + 1.0f;
+    float y = (screen_height / 2.0f) + 1.0f;
+    float w = screen_width - x;
+    float h = screen_height - y;
+    if (w > h) {
+      w = h;
+    } else {
+      h = w;
+    }
+    // DrawTexture(texture.texture, x, y, WHITE);
+    DrawTexturePro(texture.texture, { 0, 0, 64, 64 }, { x, y, w, h }, { 0, 0 }, 0, WHITE);
+  }
+}
+
+static void draw_load_file(ui_t *ui) {
+  char *text = "Load...";
+  float width = (float)GetTextWidth(text);
+  Rectangle button_rect = {
+    screen_width - width - TEXT_PADDING * 3,
+    screen_height - TEXT_SIZE - TEXT_PADDING * 3,
+    width + TEXT_PADDING * 2,
+    TEXT_SIZE + TEXT_PADDING * 2,
+  };
+  if (GuiButton(button_rect, text)) {
+    ui->opening = 1;
+  }
+
+  if (ui->opening) {
+    float window_width = 600;
+    float window_height = 500;
+    Rectangle window_rect = {
+      button_rect.x + button_rect.width - window_width,
+      button_rect.y + button_rect.height - window_height,
+      window_width,
+      window_height,
+    };
+    text = (char *)TextFormat("Load... %d", ui->files_count);
+    if (GuiWindowBox(window_rect, text)) {
+      ui->opening = 0;
+    }
+
+    Rectangle list_rect = {
+      window_rect.x,
+      window_rect.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT,
+      window_rect.width,
+      window_rect.height - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT,
+    };
+
+    if (ui->files_count) {
+      static int scroll_index;
+      static int active = -1;
+      static int focus;
+
+      int alignment = GuiGetStyle(LISTVIEW, TEXT_ALIGNMENT);
+      GuiSetStyle(LISTVIEW, TEXT_ALIGNMENT, TEXT_ALIGN_LEFT);
+
+      active = GuiListViewEx(list_rect, (const char **)ui->files, ui->files_count, &focus, &scroll_index, active);
+      if (active != -1) {
+        ui->opening = 0;
+        ui->load_file_index = active;
+        active = -1;
+      }
+
+      GuiSetStyle(LISTVIEW, TEXT_ALIGNMENT, alignment);
+    }
+  }
+}
+
+static void draw_error(simulator_t *sim) {
+  if (!sim->error.length) return;
+
+  const char *text = TextFormat("%.*s", STRING_FMT(sim->error));
+  int error_width = GetTextWidth(text);
+
+  int e_x = (screen_width / 2) - (error_width / 2);
+  int e_y = (screen_height / 2) - TEXT_PADDING;
+  DrawRectangle(e_x - TEXT_PADDING, e_y - TEXT_PADDING, error_width + TEXT_PADDING, TEXT_PADDING + TEXT_SIZE + TEXT_PADDING, RED);
+  Text(text, e_x, e_y, WHITE);
 }
 
 static void draw(simulator_t *sim, ui_t *ui) {
@@ -274,84 +356,10 @@ static void draw(simulator_t *sim, ui_t *ui) {
   draw_instructions(sim, ui);
   draw_registers(sim);
   draw_flags(sim);
+
   draw_memory(sim);
 
-  {
-    char *text = "Load...";
-    float width = (float)GetTextWidth(text);
-    Rectangle button_rect = {
-      screen_width - width - TEXT_PADDING * 3,
-      screen_height - TEXT_SIZE - TEXT_PADDING * 3,
-      width + TEXT_PADDING * 2,
-      TEXT_SIZE + TEXT_PADDING * 2,
-    };
-    if (GuiButton(button_rect, text)) {
-      ui->opening = 1;
-    }
+  draw_load_file(ui);
 
-    if (ui->opening) {
-      float window_width = 600;
-      float window_height = 500;
-      Rectangle window_rect = {
-        button_rect.x + button_rect.width - window_width,
-        button_rect.y + button_rect.height - window_height,
-        window_width,
-        window_height,
-      };
-      text = (char *)TextFormat("Load... %d", ui->files_count);
-      if (GuiWindowBox(window_rect, text)) {
-        ui->opening = 0;
-      }
-
-      Rectangle list_rect = {
-        window_rect.x,
-        window_rect.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT,
-        window_rect.width,
-        window_rect.height - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT,
-      };
-
-      if (ui->files_count) {
-        static int scroll_index;
-        static int active = -1;
-        static int focus;
-        active = GuiListViewEx(list_rect, (const char **)ui->files, ui->files_count, &focus, &scroll_index, active);
-        if (active != -1) {
-          ui->opening = 0;
-          ui->load_file_index = active;
-          active = -1;
-        }
-      }
-    }
-  }
-
-  if (true) {
-    static RenderTexture2D texture = LoadRenderTexture(64, 64);
-    if (IsRenderTextureReady(texture)) {
-      u8 *p = sim->memory + 256;
-      UpdateTexture(texture.texture, p);
-      float x = (screen_width / 2.0f) + 1.0f;
-      float y = (screen_height / 2.0f) + 1.0f;
-      float w = screen_width - x;
-      float h = screen_height - y;
-      if (w > h) {
-        w = h;
-      } else {
-        h = w;
-      }
-      // DrawTexture(texture.texture, x, y, WHITE);
-      DrawTexturePro(texture.texture, { 0, 0, 64, 64 }, { x, y, w, h }, { 0, 0 }, 0, WHITE);
-    }
-  }
-
-  // error
-  if (sim->error.length) {
-    const char *text = TextFormat("%.*s", STRING_FMT(sim->error));
-    int error_width = GetTextWidth(text);
-
-    int e_x = (screen_width / 2) - (error_width / 2);
-    int e_y = (screen_height / 2) - TEXT_PADDING;
-    DrawRectangle(e_x - TEXT_PADDING, e_y - TEXT_PADDING, error_width + TEXT_PADDING, TEXT_PADDING + TEXT_SIZE + TEXT_PADDING, RED);
-    Text(text, e_x, e_y, WHITE);
-  }
+  draw_error(sim);
 }
-

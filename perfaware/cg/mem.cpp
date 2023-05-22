@@ -39,7 +39,8 @@ void *arena_push_zero(arena_t *arena, u64 size) {
 }
 
 void arena_pop_to(arena_t *arena, u64 pos) {
-  arena->pos = pos;
+  // TODO: pow2 align
+  arena->pos = sizeof(*arena) + pos;
   // TODO: handle decommit
 }
 

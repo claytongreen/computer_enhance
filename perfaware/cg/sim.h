@@ -12,8 +12,9 @@ struct simulator_t {
   u16 flags;
 
   u8 *memory;
+
   // TODO: need a better way to mark end of program
-  u8 *code_end;
+  u32 code_end;
 
   u32 ip;
 

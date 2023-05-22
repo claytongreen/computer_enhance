@@ -13,6 +13,8 @@
   } while (0)
 
 
+#define ARRAY_COUNT(x) sizeof(x) / sizeof(x[0])
+
 typedef uint8_t u8;
 typedef int8_t s8;
 typedef uint16_t u16;

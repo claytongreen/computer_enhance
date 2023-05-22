@@ -29,7 +29,7 @@ static void ui_decode_instructions(simulator_t *sim, ui_t *ui, u32 offset) {
   u32 ip = offset;
   for (;;) {
     // TODO: more explicit way to define end of program?
-    if ((sim->memory + ip) >= sim->code_end) break;
+    if (ip >= sim->code_end) break;
 
     instruction_t instruction = instruction_decode(sim, ip);
 
@@ -51,16 +51,16 @@ static void ui_load_file(simulator_t *sim, ui_t *ui, char *file) {
 
   arena_reset(ui->arena);
 
-  string_list_t parts = string_split(ui->frame_arena, string_cstring(ui->frame_arena, file), '\\');
+  ui->instructions = PUSH_ARRAY(ui->arena, instruction_t, 1000);
+
+  string_list_t parts = string_split(ui->frame_arena, string_cstring(ui->frame_arena, file), '/');
   string_t filename = parts.last->string;
 
   string_t obj = read_entire_file(ui->frame_arena, file);
   if (obj.length) {
     sim_load(sim, obj);
 
-    ui->filename.length = filename.length;
-    ui->filename.data = PUSH_ARRAY(ui->arena, u8, ui->filename.length);
-    memcpy(ui->filename.data, filename.data, ui->filename.length);
+    ui->filename = filename;
 
     ui_decode_instructions(sim, ui, 0);
 
@@ -122,19 +122,16 @@ static void ui_step(simulator_t *sim, ui_t *ui, b32 verbose) {
 int main(void) {
   init_register_map();
 
-  ui_t ui = {};
-  ui.arena = arena_create();
-  ui.frame_arena = arena_create();
-
-  u32 max_instruction_count = 1000;
-  ui.instructions = PUSH_ARRAY(ui.arena, instruction_t, max_instruction_count);
+  ui_t ui         = {};
+  ui.arena        = arena_create();
+  ui.frame_arena  = arena_create();
 
   simulator_t sim = {};
-  sim.arena = arena_create();
-  sim.memory = PUSH_ARRAY(sim.arena, u8, MB(1));
+  sim.arena       = arena_create();
+  sim.memory      = PUSH_ARRAY(sim.arena, u8, MB(1));
 
   {
-    char *f = "..\\part1\\listing_0055_challenge_rectangle";
+    char *f = "../part1/listing_0055_challenge_rectangle";
     ui_load_file(&sim, &ui, f);
   }
 
@@ -148,7 +145,7 @@ int main(void) {
 
     // input + update
     if ((running || IsKeyPressed(KEY_F10)) && (sim.error.length == 0)) {
-      if ((sim.memory + sim.ip) >= sim.code_end) {
+      if (sim.ip >= sim.code_end) {
         if (!running) {
           sim_reset(&sim);
         }
@@ -159,7 +156,7 @@ int main(void) {
         while (steps--) {
           ui_step(&sim, &ui, 0);
 
-          if (sim.error.length || ((sim.memory + sim.ip) >= sim.code_end)) {
+          if (sim.error.length || (sim.ip >= sim.code_end)) {
             running = 0;
             break;
           }
@@ -195,8 +192,8 @@ int main(void) {
       for (u32 i = 0; i < files.count; i += 1) {
         char *path = files.paths[i];
 
-        string_list_t path_parts = string_split(ui.frame_arena, string_cstring(ui.frame_arena, path), '/');
-        string_t filename = path_parts.last->string;
+        string_list_t path_parts         = string_split(ui.frame_arena, string_cstring(ui.frame_arena, path), '/');
+        string_t      filename           = path_parts.last->string;
         string_list_t name_and_extension = string_split(ui.frame_arena, filename, '.');
         if (name_and_extension.node_count == 1) {
           string_t name = name_and_extension.first->string;
@@ -204,18 +201,20 @@ int main(void) {
         }
       }
 
-      u32 files_i = 0;
-      ui.files = PUSH_ARRAY(ui.arena, u8 *, names.node_count);
+      u8 *mem = PUSH_ARRAY(ui.arena, u8, names.total_length + names.node_count);
+
+      ui.files       = PUSH_ARRAY(ui.arena, u8 *, names.node_count);
       ui.files_count = names.node_count;
 
-      u8 *mem = PUSH_ARRAY(ui.arena, u8, names.total_length + names.node_count);
+      u32 files_i = 0;
       for (string_list_node_t *node = names.first; node; node = node->next) {
         string_t s = node->string;
 
         memcpy(mem, s.data, s.length);
 
         ui.files[files_i++] = mem;
-        mem += s.length +1;
+
+        mem += s.length + 1;
       }
 
       UnloadDirectoryFiles(files);
@@ -234,7 +233,9 @@ int main(void) {
 
       BeginDrawing();
       ClearBackground(DARKGRAY);
+
       draw(&sim, &ui);
+
       EndDrawing();
     }
   }

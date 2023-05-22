@@ -352,7 +352,7 @@ static u32 instruction_estimate_clocks(simulator_t *sim, instruction_t instructi
 static instruction_t instruction_decode(simulator_t *sim, u32 offset) {
   string_t instruction_stream = { 0 };
   instruction_stream.data = sim->memory + offset;
-  instruction_stream.length = sim->code_end - sim->memory;
+  instruction_stream.length = sim->code_end - offset;
 
   instruction_t result = {};
   result.ip = instruction_stream.data;
@@ -1001,6 +1001,8 @@ static void set_flags(simulator_t *sim, instruction_t instruction, u16 result, u
 // NOTE(cg): comments showing current regsiter state always reference full 16bit register, never high/low portion
 // TODO: return next IP?
 static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
+  if (sim->error.length) return;
+
   u32 ip = sim->ip + instruction.bytes_count;
 
   u16 dst_val = 0;
@@ -1174,8 +1176,8 @@ static void instruction_simulate(simulator_t *sim, instruction_t instruction) {
     }
   } break;
 
+  case OP_CODE_NONE: { } break;
 
-  case OP_CODE_NONE:
   case OP_CODE_DEC:
   case OP_CODE_INC:
   case OP_CODE_JA:
@@ -1207,21 +1209,18 @@ void sim_load(simulator_t *sim, string_t obj) {
   // "load" the program into memory
   memcpy(sim->memory, obj.data, obj.length);
 
-  // TODO: this should be somewhere else...
+  // TODO: this should be probably somewhere else...
   // NOTE(cg): stick an "int 3" at the end of the code
   sim->memory[obj.length + 0] = 0xcc;
   sim->memory[obj.length + 1] = 0xcc;
   sim->memory[obj.length + 2] = 0xcc;
 
-  sim->code_end = sim->memory + (obj.length + 2);
+  sim->code_end = obj.length + 2;
 }
 
 instruction_t sim_step(simulator_t *sim) {
   instruction_t instruction = instruction_decode(sim, sim->ip);
-
-  if (!sim->error.length) {
-    instruction_simulate(sim, instruction);
-  }
+  instruction_simulate(sim, instruction);
 
   return instruction;
 }
@@ -1232,12 +1231,9 @@ void sim_reset(simulator_t *sim) {
 
   arena_reset(sim->arena);
 
-  // TODO: how to clear memory but not clear  loaded asm?
-  // memset(sim->memory, 0xCC, 1024 * 1024);
+  memset(sim->memory + sim->code_end,  0, MB(1) - sim->code_end);
+  memset(sim->registers,               0, ARRAY_COUNT(sim->registers));
 
-  for (s32 i = 0; i < 8; i += 1) {
-    sim->registers[i] = 0;
-  }
   sim->flags = 0;
 }
 
