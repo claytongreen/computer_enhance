@@ -234,7 +234,6 @@ int main(void) {
       // should_draw = 0;
 
       BeginDrawing();
-      ClearBackground(BLACK);
 
       draw(&sim, &ui);
 
