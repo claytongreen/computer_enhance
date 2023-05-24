@@ -122,16 +122,18 @@ static void ui_step(simulator_t *sim, ui_t *ui, b32 verbose) {
 int main(void) {
   init_register_map();
 
-  ui_t ui         = {};
-  ui.arena        = arena_create();
-  ui.frame_arena  = arena_create();
+  ui_t ui            = {};
+  ui.arena           = arena_create();
+  ui.frame_arena     = arena_create();
+  ui.load_file_index = -1;
 
   simulator_t sim = {};
   sim.arena       = arena_create();
   sim.memory      = PUSH_ARRAY(sim.arena, u8, MB(1));
 
   {
-    char *f = "../part1/listing_0055_challenge_rectangle";
+    // char *f = "../part1/listing_0055_challenge_rectangle";
+    char *f = "../../part1/listing_0041_add_sub_cmp_jnz";
     ui_load_file(&sim, &ui, f);
   }
 
@@ -185,7 +187,7 @@ int main(void) {
     }
 
     if (ui.opening && !ui.files_count) {
-      FilePathList files = LoadDirectoryFiles("../part1");
+      FilePathList files = LoadDirectoryFiles("../../part1");
 
       string_list_t names = {};
 
@@ -220,11 +222,11 @@ int main(void) {
       UnloadDirectoryFiles(files);
     }
 
-    if (ui.load_file_index) {
+    if (ui.load_file_index != -1) {
       char path[256];
-      sprintf(path, "../part1/%s", ui.files[ui.load_file_index]);
+      sprintf(path, "../../part1/%s", ui.files[ui.load_file_index]);
       ui_load_file(&sim, &ui, path);
-      ui.load_file_index = 0;
+      ui.load_file_index = -1;
     }
 
     // RENDER
@@ -232,7 +234,7 @@ int main(void) {
       // should_draw = 0;
 
       BeginDrawing();
-      ClearBackground(DARKGRAY);
+      ClearBackground(BLACK);
 
       draw(&sim, &ui);
 

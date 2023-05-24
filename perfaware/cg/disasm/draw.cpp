@@ -1,11 +1,10 @@
-#include "raylib.h"
-#define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 32
-
 #define RAYGUI_IMPLEMENTATION
+#define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 32
 #include "raygui.h"
 
-
 #include "sim.h"
+
+#include <math.h>
 
 struct ui_t {
   string_t filename;
@@ -37,19 +36,103 @@ static void Text(const char *text, float x, float y, Color c) {
   GuiDrawText(text, bounds, 0, c);
 }
 
-static void draw_instructions(simulator_t *sim, ui_t *ui) {
+enum RectCutSide {
+    RectCut_Left,
+    RectCut_Right,
+    RectCut_Top,
+    RectCut_Bottom,
+};
+
+struct RectCut {
+    Rectangle* rect;
+    RectCutSide side;
+};
+
+static Rectangle cut_left(Rectangle* rect, float f) {
+    float x = rect->x;
+    float width = rect->width;
+    rect->x = fmin(rect->x + rect->width, rect->x + f);
+    rect->width -= (rect->x - x);
+    
+    Rectangle result = {};
+    result.x = x;
+    result.y = rect->y;
+    result.width = width - rect->width;
+    result.height = rect->height;
+
+    return result;
+}
+
+static Rectangle cut_right(Rectangle* rect, float f) {
+    float width = rect->width;
+    rect->width = fmax(0, rect->width - f);
+
+    Rectangle result = {};
+    result.x = rect->x + rect->width;
+    result.y = rect->y;
+    result.width = (rect->x + width) - result.x;
+    result.height = rect->height;
+    return result;
+}
+
+static Rectangle cut_top(Rectangle* rect, float f) {
+    float y = rect->y;
+    float height = rect->height;
+    rect->y = fmin(rect->y + rect->height, rect->y + f);
+    rect->height -= rect->y - y;
+
+
+    Rectangle result = {};
+    result.x = rect->x;
+    result.y = y;
+    result.width = rect->width;
+    result.height = height - rect->height;
+    return result;
+}
+
+static Rectangle cut_bottom(Rectangle* rect, float f) {
+    float height = rect->height;
+    rect->height = fmax(0, rect->height - f);
+
+    Rectangle result = {};
+    result.x = rect->x;
+    result.y = rect->y + rect->height;
+    result.width = rect->width;
+    result.height = (rect->y + height) - result.y;
+    return result;
+}
+
+static Rectangle rectcut_cut(RectCut cut, float f) {
+    switch (cut.side) {
+    case RectCut_Left: return cut_left(cut.rect, f);
+    case RectCut_Right: return cut_right(cut.rect, f);
+    case RectCut_Top: return cut_top(cut.rect, f);
+    case RectCut_Bottom: return cut_bottom(cut.rect, f);
+    }
+
+    __debugbreak();
+    return *cut.rect;
+}
+
+static void draw_instructions(Rectangle rect, simulator_t *sim, ui_t *ui) {
   instruction_t *instructions = ui->instructions;
   u32 instruction_count = ui->instruction_count; 
 
-  Rectangle rect = { 0, 0, screen_width / 2.0f, screen_height};
-
   GuiPanel(rect, TextFormat("%.*s", STRING_FMT(ui->filename)));
 
-  int instructions_height = instruction_count * line_height;
+  float instructions_height = (instruction_count * line_height) * 1.25f;
+
+  // TODO: scroll active instruction into view
 
   static Vector2 scroll;
-  static Rectangle scroll_rec = { 0, (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT, screen_width / 2.0f, screen_height - (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT };
-  static Rectangle scroll_content_rec = { 0, 0, scroll_rec.width - 2, instructions_height * 1.5f };
+  static Rectangle scroll_rec = { rect.x, rect.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT, rect.width, rect.height - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT };
+  static Rectangle scroll_content_rec = { 0, 0, scroll_rec.width - SCROLLBAR_WIDTH, instructions_height };
+
+  if (scroll_content_rec.height != instructions_height) {
+    scroll_content_rec.height = instructions_height;
+    scroll = {};
+  }
+
   Rectangle view = GuiScrollPanel(scroll_rec, NULL, scroll_content_rec, &scroll);
   BeginScissorMode(view.x, view.y, view.width, view.height);
 
@@ -64,20 +147,24 @@ static void draw_instructions(simulator_t *sim, ui_t *ui) {
     b32 current = (sim->memory + sim->ip) == instruction.ip;
 
     if (current) {
-      DrawRectangleRec({ rect.x, (float)text_y, rect.width, TEXT_SIZE }, Fade(RED, 0.1f));
+      Color color = GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_PRESSED));
+      float height = TEXT_SIZE + TEXT_INNER_PADDING;
+      DrawRectangleRec({ rect.x, (float)(text_y - (TEXT_INNER_PADDING / 2)), rect.width, height }, color);
     }
 
     int x = text_x;
 
     { // address
+      Color color = current ? GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_PRESSED)) : Fade(GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL)), 0.5);
       const char *text = TextFormat("%06x", instruction.ip - sim->memory);
-      Text(text, x, text_y, LIGHTGRAY);
+      Text(text, x, text_y, color);
       x += address_width + TEXT_PADDING;
     }
     { // instruction bytes
+      Color color = current ? GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_PRESSED)) : Fade(GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL)), 0.75);
       for (u8 *b = instruction.ip; b < (instruction.ip + instruction.bytes_count); b += 1) {
         const char *text = TextFormat("%02x", *b);
-        Text(text, x, text_y, DARKGRAY);
+        Text(text, x, text_y, color);
         x += byte_width * 1.25;
       }
       x = text_x + address_width + ((ui->max_instruction_width + 1) * byte_width * 1.25);
@@ -85,8 +172,8 @@ static void draw_instructions(simulator_t *sim, ui_t *ui) {
     { // decoded instruction
       string_t s = print_instruction(ui->frame_arena, sim, instruction);
       const char *text = TextFormat("%.*s", STRING_FMT(s));
-      Color c = current ? RED : BLACK;
-      Text(text, x, text_y, c);
+      GuiControlProperty c = current ? TEXT_COLOR_PRESSED : TEXT_COLOR_NORMAL;
+      Text(text, x, text_y, GetColor(GuiGetStyle(DEFAULT, c)));
     }
 
     text_y += line_height;
@@ -97,29 +184,28 @@ static void draw_instructions(simulator_t *sim, ui_t *ui) {
 
 static float registers_height = (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + (line_height * 13) + (TEXT_PADDING * 4);
 
-static void draw_registers(simulator_t *sim) {
+static void draw_registers(RectCut layout, simulator_t *sim) {
   int reg_width = GetTextWidth("xx");
   int val_width = GetTextWidth("0x0000");
   int ival_width = GetTextWidth("-32767");
   // int c = GetTextWidth("0000_0000 0000_0000", text_size);
 
-  Rectangle rect = {
-    screen_width  / 2.0f,
-    0.0f,
-    screen_width  / 2.0f,
-    registers_height,
-  };
+  Color primary = GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL));
+  Color secondary = Fade(primary, 0.8);
+  Color active = GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_PRESSED));
+  
 
+  Rectangle rect = rectcut_cut(layout, registers_height);
   GuiPanel(rect, "Registers");
 
   rect.x += TEXT_PADDING;
   rect.y += (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + TEXT_PADDING;
 
   {
-    Text("IP", rect.x, rect.y, DARKGRAY);
+    Text("IP", rect.x, rect.y, primary);
 
     const char *text = TextFormat("0x%04x", sim->ip);
-    Text(text, rect.x + reg_width + TEXT_PADDING, rect.y, BLACK);
+    Text(text, rect.x + reg_width + TEXT_PADDING, rect.y, primary);
   }
 
   rect.y += TEXT_SIZE + TEXT_PADDING;
@@ -135,19 +221,19 @@ static void draw_registers(simulator_t *sim) {
       // TODO: handle value change for H/L
 
       const char *text = TextFormat("%.*s", STRING_FMT(register_names[reg]));
-      Text(text, x, rect.y, DARKGRAY);
+      Text(text, x, rect.y, primary);
       x += reg_width + TEXT_PADDING * 2.0f;
 
-      Color c = changed ? RED : BLACK;
+      Color c = changed ? active : primary;
       text = TextFormat("0x%04x", value);
       Text(text, x, rect.y, c);
       x += val_width + TEXT_PADDING;
 
       text = TextFormat("%d", value);
-      Text(text, x, rect.y, DARKGRAY);
+      Text(text, x, rect.y, primary);
       x += ival_width + TEXT_PADDING;
 
-      Text(bit_string16(value), x, rect.y, DARKGRAY);
+      Text(bit_string16(value), x, rect.y, secondary);
 
       rect.y += line_height;
     }
@@ -169,19 +255,19 @@ static void draw_registers(simulator_t *sim) {
       // TODO: handle value change for H/L
 
       const char *text = TextFormat("%.*s", STRING_FMT(register_names[reg]));
-      Text(text, x, rect.y, DARKGRAY);
+      Text(text, x, rect.y, primary);
       x += reg_width + TEXT_PADDING * 2.0f;
 
-      Color c = changed ? RED : BLACK;
+      Color c = changed ? active : primary;
       text = TextFormat("0x%04x", value);
       Text(text, x, rect.y, c);
       x += val_width + TEXT_PADDING;
 
       text = TextFormat("%d", value);
-      Text(text, x, rect.y, DARKGRAY);
+      Text(text, x, rect.y, primary);
       x += ival_width + TEXT_PADDING;
 
-      Text(bit_string16(value), x, rect.y, DARKGRAY);
+      Text(bit_string16(value), x, rect.y, secondary);
 
       rect.y += line_height;
     }
@@ -203,40 +289,37 @@ static void draw_registers(simulator_t *sim) {
       // TODO: handle value change for H/L
 
       const char *text = TextFormat("%.*s", STRING_FMT(register_names[reg]));
-      Text(text, x, rect.y, DARKGRAY);
+      Text(text, x, rect.y, primary);
       x += reg_width + TEXT_PADDING * 2.0f;
 
-      Color c = changed ? RED : BLACK;
+      Color c = changed ? active : primary;
       text = TextFormat("0x%04x", value);
       Text(text, x, rect.y, c);
       x += val_width + TEXT_PADDING;
 
       text = TextFormat("%d", value);
-      Text(text, x, rect.y, DARKGRAY);
+      Text(text, x, rect.y, primary);
       x += ival_width + TEXT_PADDING;
 
-      Text(bit_string16(value), x, rect.y, DARKGRAY);
+      Text(bit_string16(value), x, rect.y, secondary);
 
       rect.y += line_height;
     }
   }
 }
 
-static void draw_flags(simulator_t *sim) {
+static void draw_flags(RectCut layout, simulator_t *sim) {
   float flag_size = 40;
 
-  float x = screen_width / 2.0f;
-  float y = registers_height;
-  float width = screen_width / 2.0f;
   float height = (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + TEXT_PADDING * 2.0f + flag_size;
-  Rectangle rect = { x, y, width, height };
 
+  Rectangle rect = rectcut_cut(layout, height);
   GuiPanel(rect, "Flags");
 
   flag_t flags[] = { FLAG_CARRY, FLAG_PARITY, FLAG_AUXILIARY_CARRY, FLAG_ZERO, FLAG_SIGN, FLAG_OVERFLOW, };
   u32 flag_count = ARRAY_COUNT(flags);
 
-  Rectangle r = { x + TEXT_PADDING, y + (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + TEXT_PADDING, flag_size, flag_size };
+  Rectangle r = { rect.x + TEXT_PADDING, rect.y + (float)RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + TEXT_PADDING, flag_size, flag_size };
   for (s32 i = 0; i < flag_count; i += 1) {
     flag_t flag = flags[i];
 
@@ -253,23 +336,18 @@ static void draw_flags(simulator_t *sim) {
   }
 }
 
-static void draw_memory(simulator_t *sim) {
+static void draw_memory(Rectangle rect, simulator_t *sim) {
   static RenderTexture2D texture = LoadRenderTexture(64, 64);
 
   if (IsRenderTextureReady(texture)) {
     u8 *p = sim->memory + 256;
     UpdateTexture(texture.texture, p);
-    float x = (screen_width / 2.0f) + 1.0f;
-    float y = (screen_height / 2.0f) + 1.0f;
-    float w = screen_width - x;
-    float h = screen_height - y;
-    if (w > h) {
-      w = h;
-    } else {
-      h = w;
-    }
-    // DrawTexture(texture.texture, x, y, WHITE);
-    DrawTexturePro(texture.texture, { 0, 0, 64, 64 }, { x, y, w, h }, { 0, 0 }, 0, WHITE);
+
+    float size = fmin(rect.width, rect.height) - TEXT_PADDING;
+    float x = rect.x + (rect.width / 2.0) - (size / 2.0);
+    float y = rect.y + (rect.height / 2.0) - (size / 2.0);
+
+    DrawTexturePro(texture.texture, { 0, 0, 64, 64 }, { x, y, size, size }, {0, 0}, 0, WHITE);
   }
 }
 
@@ -344,20 +422,25 @@ static void draw(simulator_t *sim, ui_t *ui) {
   if (init) {
     init = 0;
 
-    font = LoadFont("build\\FiraCode-Regular.ttf");
-  }
+    GuiLoadStyle("../build/purp.rgs");
+    //GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 
+    font = LoadFont("..\\build\\FiraCode-Regular.ttf");
+  }
   GuiSetFont(font);
 
-  Rectangle window = {};
-  window.width = screen_width;
-  window.height = screen_height;
+  ClearBackground(ColorBrightness(ColorContrast(GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_NORMAL)), -0.5), -0.5));
+  
+  Rectangle layout = {};
+  layout.width = screen_width;
+  layout.height = screen_height;
 
-  draw_instructions(sim, ui);
-  draw_registers(sim);
-  draw_flags(sim);
+  Rectangle left = cut_left(&layout, screen_width / 2.0f);
+  draw_instructions(left, sim, ui);
+  draw_registers(RectCut{ &layout, RectCut_Top }, sim);
+  draw_flags(RectCut{ &layout, RectCut_Top }, sim);
 
-  draw_memory(sim);
+  draw_memory(layout, sim);
 
   draw_load_file(ui);
 
