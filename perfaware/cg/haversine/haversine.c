@@ -9,6 +9,28 @@
 #include <string.h>
 #include <assert.h>
 
+#include <sys/stat.h>
+
+#include <intrin.h>
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+
+static uint64_t os_timer_frequency(void) {
+  LARGE_INTEGER frequency;
+  QueryPerformanceFrequency(&frequency);
+  return frequency.QuadPart;
+}
+
+static uint64_t os_timer_read(void) {
+  LARGE_INTEGER value;
+  QueryPerformanceCounter(&value);
+  return value.QuadPart;
+}
+
+static uint64_t cpu_timer_read(void) {
+  return __rdtsc();
+}
+
 // TODO: no crt
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -42,8 +64,7 @@ static double ReferenceHaversine(double X0, double Y0, double X1, double Y1, dou
   lat1 = RadiansFromDegrees(lat1);
   lat2 = RadiansFromDegrees(lat2);
 
-  double a =
-      Square(sin(dLat / 2.0)) + cos(lat1) * cos(lat2) * Square(sin(dLon / 2));
+  double a = Square(sin(dLat / 2.0)) + cos(lat1) * cos(lat2) * Square(sin(dLon / 2));
   double c = 2.0 * asin(sqrt(a));
 
   double Result = EarthRadius * c;
@@ -73,8 +94,7 @@ static int generate_data(int32_t seed, int32_t num_coord_pairs) {
   }
 
   char *haveranswer_filename = json_filename + 1024;
-  snprintf(haveranswer_filename, 1024, "build/data_%d_haveranswer.f64",
-           num_coord_pairs);
+  snprintf(haveranswer_filename, 1024, "build/data_%d_haveranswer.f64", num_coord_pairs);
   FILE *haveranswer = fopen(haveranswer_filename, "wb+");
   if (!haveranswer) {
     fclose(json);
@@ -137,13 +157,32 @@ static int generate_data(int32_t seed, int32_t num_coord_pairs) {
 typedef struct string_t string_t;
 struct string_t {
   char *data;
-  uint32_t length;
+  int32_t length;
 };
+
+#define STR(s) (string_t){ (s), (int32_t)strlen((s)) }
+
+static bool string_equals(string_t a, string_t b) {
+  bool result = false;
+
+  if (a.length == b.length) {
+    int32_t i = 0;
+    for (; i < a.length; i += 1) {
+      if (a.data[i] != b.data[i]) {
+        break;
+      }
+    }
+
+    result = (i == a.length);
+  }
+
+  return result;
+}
 
 static string_t read_entire_file(char *filename) {
   string_t result = { 0 };
 
-  FILE *file = fopen(filename, "r");
+  FILE *file = fopen(filename, "rb");
   if (!file) {
     fprintf(stderr, "Failed to open file: '%s'\n", filename);
   } else {
@@ -158,7 +197,7 @@ static string_t read_entire_file(char *filename) {
       fseek(file, 0, SEEK_SET);
       size_t bytes_read = fread(result.data, 1, length, file);
       if (bytes_read != length) {
-        fprintf(stderr, "Read %lld bytes, expectecd %ld bytes\n", bytes_read, length);
+        fprintf(stderr, "Read %lld bytes, expecteed %ld bytes\n", bytes_read, length);
       }
       // TODO: WHY?? bytes_read != length
       // if (bytes_read != length) {
@@ -231,6 +270,7 @@ struct json_t {
 
   json_type_t *root;
 
+  // "arena"
   uint8_t *mem;
   uint32_t mem_offset;
 };
@@ -242,10 +282,12 @@ enum token_kind_t {
 
   // ascii tokens... {, [, ", : (others?)
 
-  TOKEN_KIND_STRING = 256,
+  TOKEN_KIND_NULL = 256,
+  TOKEN_KIND_STRING,
   TOKEN_KIND_LONG,
   TOKEN_KIND_DOUBLE,
-  TOKEN_KIND_BOOL, // true, false
+  TOKEN_KIND_TRUE,
+  TOKEN_KIND_FALSE,
 
   TOKEN_KIND_EOF,
 };
@@ -265,10 +307,10 @@ struct token_t {
 typedef struct tokenizer_t tokenizer_t;
 struct tokenizer_t {
   string_t source;
-  uint32_t at;
+  int32_t at;
 
   uint8_t *mem;
-  uint32_t mem_offset;
+  int32_t mem_offset;
 };
 
 static bool ok(tokenizer_t *tokenizer) {
@@ -290,12 +332,35 @@ static uint8_t peek(tokenizer_t *tokenizer) {
 static void eat_whitespace(tokenizer_t *tokenizer) {
   while (ok(tokenizer)) {
     char c = peek(tokenizer);
-    if (c == ' ' || c == '\t' || c == '\n') {
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
       next(tokenizer);
     } else {
       break;
     }
   }
+}
+
+static bool word_matches(tokenizer_t *tokenizer, string_t word) {
+  bool result = true;
+
+  int32_t at = tokenizer->at;
+  int32_t i = 0;
+  while (ok(tokenizer)) {
+    uint8_t c = peek(tokenizer);
+
+    if (i >= word.length)  break;
+    if (word.data[i] != c) break;
+
+    i += 1;
+    next(tokenizer);
+  }
+
+  if (i != word.length) {
+    result = false;
+    tokenizer->at = at;
+  }
+
+  return result;
 }
 
 static token_t *next_token(tokenizer_t *tokenizer) {
@@ -329,24 +394,31 @@ static token_t *next_token(tokenizer_t *tokenizer) {
 
   if (token->kind == TOKEN_KIND_NONE) {
     if (isalpha(c)) {
-      // TODO: handle bool true/false
-
-      token->kind = TOKEN_KIND_STRING;
       token->string.data = &tokenizer->source.data[start];
 
-      while (ok(tokenizer)) {
-        c = peek(tokenizer);
-        if (isalpha(c) || isdigit(c) || c == '-' || c == '_') {
-          next(tokenizer);
-        } else {
-          break;
+      // TODO: handle uppercase??
+
+      if (word_matches(tokenizer, STR("true"))) {
+        token->kind = TOKEN_KIND_TRUE;
+      } else if (word_matches(tokenizer, STR("false"))) {
+        token->kind = TOKEN_KIND_FALSE;
+      } else if (word_matches(tokenizer, STR("null"))) {
+        token->kind = TOKEN_KIND_NULL;
+      } else {
+        token->kind = TOKEN_KIND_STRING;
+
+        while (ok(tokenizer)) {
+          c = peek(tokenizer);
+          if (isalpha(c) || isdigit(c) || c == '-' || c == '_') {
+            next(tokenizer);
+          } else {
+            break;
+          }
         }
       }
 
       token->string.length = tokenizer->at - start;
-
     } else if (isdigit(c) || c == '-' || c == '+') {
-
       bool isDouble = false;
       while (ok(tokenizer)) {
         c = peek(tokenizer);
@@ -383,10 +455,12 @@ static token_t *next_token(tokenizer_t *tokenizer) {
 static void token_print(token_t *token) {
   switch (token->kind) {
   case TOKEN_KIND_NONE: printf("NONE"); break;
+  case TOKEN_KIND_NULL: printf("null"); break;
+  case TOKEN_KIND_TRUE: printf("true"); break;
+  case TOKEN_KIND_FALSE: printf("false"); break;
   case TOKEN_KIND_STRING: printf("%.*s", token->string.length, token->string.data); break;
   case TOKEN_KIND_LONG: printf("%ld", token->number_long); break;
   case TOKEN_KIND_DOUBLE: printf("%f", token->number_double); break;
-  case TOKEN_KIND_BOOL: printf("TODO BOOL"); break;
   case TOKEN_KIND_EOF: printf("EOF"); break;
   default: printf("%c", (char)token->kind); break;
   }
@@ -563,22 +637,6 @@ static void json_decode(json_t *json, uint8_t *mem) {
   } else {
     // TODO: error
   }
-
-#if 0
-  token_t *token;
-  while (true) {
-    token = next_token(&tokenizer);
-    //if (token->kind == TOKEN_KIND_DOUBLE) {
-      // token_print(token);
-//      printf(" ");
-//    }
-//    if (token->kind == '}') 
-        //printf("\n");
-
-    if (token->kind == TOKEN_KIND_EOF) break;
-    if (token->kind == TOKEN_KIND_NONE) break;
-  }
-#endif
 }
 
 static void json_print_type(json_type_t *it, uint32_t *depth);
@@ -627,25 +685,172 @@ static void json_print(json_t *json) {
   json_print_type(json->root, &depth);
 }
 
-static int decode_json(char *filename) {
-  string_t source = read_entire_file(filename);
-  if (source.length == 0) {
-    return 1;
-  }
-
+static json_t decode_json(string_t source) {
   json_t json = { 0 };
   json.root = &null_type;
   json.source = source;
 
-  // TODO: just get double the length of the json file cause why not
-  // uint32_t size = source.length * 2;
-  uint32_t size = 4096 * 1024; // 4 mb?
+  // allocate "arena"
+  uint32_t size = 4096 * 1024; // 4 mb? probably a smarter way to "guess" a size
   uint8_t *mem = (uint8_t *)malloc(size);
   memset(mem, 0, size);
 
   json_decode(&json, mem);
 
-  json_print(&json);
+  return json;
+}
+
+static json_type_t *json_find_property(json_type_t *root, string_t property) {
+  json_type_t *result = &null_type;
+
+  if (root->kind == JSON_TYPE_KIND_OBJECT) {
+    json_object_t *object = root->object;
+    json_object_property_t *prop = object->properties;
+
+    while (prop) {
+      if (string_equals(prop->name, property)) {
+        result = prop->value;
+        break;
+      }
+
+      prop = prop->next;
+    }
+  }
+
+  return result;
+}
+
+static int decode_data(char *filename, char *answers_filename) {
+  uint64_t os_freq = os_timer_frequency();
+
+  uint64_t cpu_start = cpu_timer_read();
+  uint64_t os_start = os_timer_read();
+
+  string_t source = read_entire_file(filename);
+  if (source.length == 0) {
+    return 1;
+  }
+  uint64_t timer_read = cpu_timer_read();
+
+  double *answers = NULL;
+  if (answers_filename) {
+    FILE *f = fopen(answers_filename, "rb");
+    if (f) {
+      struct __stat64 stat;
+      _stat64(answers_filename, &stat);
+
+      answers = (double *)malloc(stat.st_size);
+      if (answers) {
+        if (fread(answers, stat.st_size, 1, f) != 1) {
+          fprintf(stderr, "Failed to open answers file: \"%s\"\n", answers_filename);
+          free(answers);
+          answers = NULL;
+        }
+      }
+
+      fclose(f);
+
+      if (!answers) {
+        return 1;
+      }
+    }
+  }
+  uint64_t timer_read_answers = cpu_timer_read();
+
+  json_t json = decode_json(source);
+  uint64_t timer_parse = cpu_timer_read();
+  if (json.root->kind != JSON_TYPE_KIND_NULL) {
+    json_type_t *coords = json_find_property(json.root, STR("coords"));
+    if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
+      double avg = 0;
+
+      json_array_t *arr = coords->array;
+
+      double *answer = answers;
+
+      json_array_value_t *value = arr->values;
+      while (value) {
+        json_type_t *x0 = json_find_property(value->value, STR("x0"));
+        json_type_t *y0 = json_find_property(value->value, STR("y0"));
+        json_type_t *x1 = json_find_property(value->value, STR("x1"));
+        json_type_t *y1 = json_find_property(value->value, STR("y1"));
+
+        if (
+          x0 && x0->kind == JSON_TYPE_KIND_NUMBER &&
+          y0 && y0->kind == JSON_TYPE_KIND_NUMBER &&
+          x1 && x1->kind == JSON_TYPE_KIND_NUMBER &&
+          y1 && y1->kind == JSON_TYPE_KIND_NUMBER
+        ) {
+          double haversine = ReferenceHaversine(x0->number, y0->number, x1->number, y1->number, EARTH_RADIUS);
+
+          if (answer) {
+            if (*answer != haversine) {
+              fprintf(stderr, "Expected haversine %f, got %f\n", *answer, haversine);
+              return 1;
+            }
+
+            answer += 1;
+          }
+
+          avg += haversine;
+
+          value = value->next;
+        } else {
+          fprintf(stderr, "Failed to parse coord pair\n");
+          return 1;
+        }
+      }
+
+      double haversum = avg / (double) arr->num_values;
+
+      if (answer && *answer != haversum) {
+        fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
+        return 1;
+      }
+
+      uint64_t timer_sum = cpu_timer_read();
+
+      uint64_t os_end = os_timer_read();
+      uint64_t os_elapsed = os_end - os_start;
+      uint64_t cpu_end = cpu_timer_read();
+      uint64_t cpu_elapsed = cpu_end - cpu_start;
+      uint64_t cpu_freq = os_elapsed ? (os_freq * cpu_elapsed / os_elapsed) : 0;
+
+      uint64_t read = timer_read - cpu_start;
+      double read_pct = (double)read / (double)cpu_elapsed * 100.0;
+
+      uint64_t read_answers = timer_read_answers - timer_read;
+      double read_answers_pct = (double)read_answers / (double)cpu_elapsed * 100.0;
+
+      uint64_t parse = timer_parse - timer_read_answers;
+      double parse_pct = (double)parse / (double)cpu_elapsed * 100.0;
+
+      uint64_t sum = timer_sum - timer_parse;
+      double sum_pct = (double)sum / (double)cpu_elapsed * 100.0;
+
+      double total_time = (double)os_elapsed / (double)os_freq * 1000;
+
+      printf("\n");
+      printf("Input size: %d\n", source.length);
+      printf("Pair count: %d\n", arr->num_values);
+      printf("Haversine sum: %f\n", haversum);
+      printf("\n");
+      printf("Total time: %fms (CPU freq %lld)\n", total_time, cpu_freq);
+      // printf("  Startup: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
+      printf("  Read: %lld (%.2f%%)\n", read, read_pct);
+      printf("  Read Answers: %lld (%.2f%%)\n", read_answers, read_answers_pct);
+      printf("  Parse: %lld (%.2f%%)\n", parse, parse_pct);
+      printf("  Sum: %lld (%.2f%%)\n", sum, sum_pct);
+      // printf("  Output: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
+    } else {
+      fprintf(stderr, "Failed to find \"coords\" array\n");
+      return 1;
+    }
+  } else {
+    // TODO: record error in json
+    fprintf(stderr, "Failed to parse json\n");
+    return 1;
+  }
 
   return 0;
 }
@@ -671,10 +876,11 @@ int main(int argc, char **argv) {
     int32_t num_coordinates = atoi(argv[3]);
 
     return generate_data(seed, num_coordinates);
-  } else if (strcmp(command, "decode") == 0 && argc == 3) {
+  } else if (strcmp(command, "decode") == 0 && argc > 2) {
     char *filename = argv[2];
+    char *answers_filename = argc > 2 ? argv[3] : NULL;
 
-    return decode_json(filename);
+    return decode_data(filename, answers_filename);
   } else {
     print_usage(argv[0]);
     return 1;
