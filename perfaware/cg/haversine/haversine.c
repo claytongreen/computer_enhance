@@ -15,6 +15,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#define TRACE 0
+#define USE_MALLOC 0
+
 static uint64_t os_timer_frequency(void) {
   LARGE_INTEGER frequency;
   QueryPerformanceFrequency(&frequency);
@@ -179,8 +182,20 @@ static void *arena_push(arena_t *arena, int64_t size) {
   return result;
 }
 
+#if USE_MALLOC
+
+static void *push(int64_t size) {
+  void *result = malloc(size);
+  memset(result, 0, size);
+  return result;
+}
+
+#define NEW(PARENT, TYPE) (TYPE *)push(sizeof(TYPE))
+#define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)push((SIZE))
+#else
 #define NEW(PARENT, TYPE) (TYPE *)arena_push((PARENT)->arena, sizeof(TYPE))
 #define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)arena_push((PARENT)->arena, (SIZE))
+#endif
 
 typedef struct string_t string_t;
 struct string_t {
@@ -247,6 +262,7 @@ static string_t read_entire_file(char *filename) {
 
 typedef enum json_type_kind_t json_type_kind_t;
 enum json_type_kind_t {
+  JSON_TYPE_KIND_NONE,
   JSON_TYPE_KIND_NULL,
   JSON_TYPE_KIND_NUMBER,
   JSON_TYPE_KIND_STRING,
@@ -354,14 +370,17 @@ static uint8_t peek(tokenizer_t *tokenizer) {
   return result;
 }
 
+static bool is_whitespace(char c) {
+  bool result = c == ' ' || c == '\t' || c == '\n' || c == '\r';
+  return result;
+}
+
 static void eat_whitespace(tokenizer_t *tokenizer) {
   while (ok(tokenizer)) {
     char c = peek(tokenizer);
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-      next(tokenizer);
-    } else {
-      break;
-    }
+    if (!is_whitespace(c)) break;
+
+    next(tokenizer);
   }
 }
 
@@ -386,6 +405,20 @@ static bool word_matches(tokenizer_t *tokenizer, string_t word) {
   }
 
   return result;
+}
+
+static void token_print(token_t *token) {
+  switch (token->kind) {
+  case TOKEN_KIND_NONE: printf("NONE"); break;
+  case TOKEN_KIND_NULL: printf("null"); break;
+  case TOKEN_KIND_TRUE: printf("true"); break;
+  case TOKEN_KIND_FALSE: printf("false"); break;
+  case TOKEN_KIND_STRING: printf("%.*s", token->string.length, token->string.data); break;
+  case TOKEN_KIND_LONG: printf("%ld", token->number_long); break;
+  case TOKEN_KIND_DOUBLE: printf("%f", token->number_double); break;
+  case TOKEN_KIND_EOF: printf("EOF"); break;
+  default: printf("%c", (char)token->kind); break;
+  }
 }
 
 static token_t *next_token(tokenizer_t *tokenizer) {
@@ -474,21 +507,12 @@ static token_t *next_token(tokenizer_t *tokenizer) {
     }
   }
 
-  return token;
-}
+#if TRACE
+  token_print(token);
+  printf("\n");
+#endif
 
-static void token_print(token_t *token) {
-  switch (token->kind) {
-  case TOKEN_KIND_NONE: printf("NONE"); break;
-  case TOKEN_KIND_NULL: printf("null"); break;
-  case TOKEN_KIND_TRUE: printf("true"); break;
-  case TOKEN_KIND_FALSE: printf("false"); break;
-  case TOKEN_KIND_STRING: printf("%.*s", token->string.length, token->string.data); break;
-  case TOKEN_KIND_LONG: printf("%ld", token->number_long); break;
-  case TOKEN_KIND_DOUBLE: printf("%f", token->number_double); break;
-  case TOKEN_KIND_EOF: printf("EOF"); break;
-  default: printf("%c", (char)token->kind); break;
-  }
+  return token;
 }
 
 static json_type_t null_type = { JSON_TYPE_KIND_NULL };
@@ -510,13 +534,17 @@ static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
 
   token_t *token;
   while (true) {
-    token = next_token(tokenizer); assert(token->kind == '"');
+    token = next_token(tokenizer);
+    assert(token->kind == '"');
 
-    token = next_token(tokenizer); assert(token->kind == TOKEN_KIND_STRING);
+    token = next_token(tokenizer);
+    assert(token->kind == TOKEN_KIND_STRING);
     prop->name = token->string;
 
-    token = next_token(tokenizer); assert(token->kind == '"');
-    token = next_token(tokenizer); assert(token->kind == ':');
+    token = next_token(tokenizer);
+    assert(token->kind == '"');
+    token = next_token(tokenizer);
+    assert(token->kind == ':');
 
     token = next_token(tokenizer);
     if (token->kind == '{') {
@@ -551,8 +579,16 @@ static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
     //    TODO: ...
     // }
     } else {
-      fprintf(stderr, "Unexpected token:\n\t");
+      fprintf(stderr, "Unexpected token: \"");
       token_print(token);
+      printf("\" @ %d\n", tokenizer->at);
+      result->kind = JSON_TYPE_KIND_NONE;
+      return result;
+    }
+
+    if (prop->value->kind == JSON_TYPE_KIND_NONE){
+      result->kind = JSON_TYPE_KIND_NONE;
+      return result;
     }
 
     token = next_token(tokenizer);
@@ -564,9 +600,11 @@ static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
     } else if (token->kind == '}') {
       break;
     } else {
-      fprintf(stderr, "Unexpected token:\n\t");
+      fprintf(stderr, "Unexpected token: \"");
       token_print(token);
-      break;
+      printf("\" @ %d\n", tokenizer->at);
+      result->kind = JSON_TYPE_KIND_NONE;
+      return result;
     }
   }
 
@@ -620,8 +658,16 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
     //    TODO: ...
     // }
     } else {
-      fprintf(stderr, "Unexpected token:\n\t");
+      fprintf(stderr, "Unexpected token: \"");
       token_print(token);
+      printf("\" @ %d\n", tokenizer->at);
+      result->kind = JSON_TYPE_KIND_NONE;
+      return result;
+    }
+
+    if (array_value->value->kind == JSON_TYPE_KIND_NONE){
+      result->kind = JSON_TYPE_KIND_NONE;
+      return result;
     }
 
     token = next_token(tokenizer);
@@ -633,9 +679,11 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
     } else if (token->kind == ']') {
       break;
     } else {
-      fprintf(stderr, "Unexpected token:\n\t");
+      fprintf(stderr, "Unexpected token: \"");
       token_print(token);
-      break;
+      printf("\" @ %d\n", tokenizer->at);
+      result->kind = JSON_TYPE_KIND_NONE;
+      return result;
     }
   }
 
@@ -649,7 +697,9 @@ static void json_decode(json_t *json) {
   }
 
   tokenizer_t tokenizer = { json->source };
+#if !USE_MALLOC
   tokenizer.arena = json->arena;
+#endif
 
   token_t *token = next_token(&tokenizer);
   if (token->kind == '{') {
@@ -709,16 +759,19 @@ static void json_print(json_t *json) {
 
 #define KB(N) (N) * 1024
 #define MB(N) (N) * KB(1024)
+#define GB(N) (N) * MB(1024)
 
 static json_t decode_json(string_t source) {
-  int64_t capacity = MB(16);
-
-  arena_t *arena = arena_create(capacity);
 
   json_t json = { 0 };
   json.root = &null_type;
   json.source = source;
+
+#if !USE_MALLOC
+  int64_t capacity = GB(1);
+  arena_t *arena = arena_create(capacity);
   json.arena = arena;
+#endif
 
   json_decode(&json);
 
