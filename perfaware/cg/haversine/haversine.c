@@ -147,12 +147,40 @@ static int generate_data(int32_t seed, int32_t num_coord_pairs) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define NEW(PARENT, TYPE) \
-  (TYPE *)&(PARENT)->mem[(PARENT)->mem_offset]; \
-  (PARENT)->mem_offset += sizeof(TYPE);
-#define NEW_SIZE(PARENT, TYPE, SIZE) \
-  (TYPE *)&(PARENT)->mem[(PARENT)->mem_offset]; \
-  (PARENT)->mem_offset += (SIZE);
+typedef struct arena_t arena_t;
+struct arena_t {
+  uint8_t *memory;
+  int64_t at;
+  int64_t capacity;
+};
+
+static arena_t null_arena = { 0, 0, 0 };
+
+static arena_t *arena_create(int64_t capacity) {
+  arena_t *result = &null_arena;
+
+  void *memory = malloc(capacity);
+  if (memory) {
+    result = (arena_t *)memory;
+    result->memory  = memory;
+    result->at = sizeof(arena_t);
+    result->capacity = capacity;
+  }
+
+  return result;
+}
+
+static void *arena_push(arena_t *arena, int64_t size) {
+  assert(arena->at + size < arena->capacity);
+
+  void *result = arena->memory + arena->at;
+  arena->at += size;
+
+  return result;
+}
+
+#define NEW(PARENT, TYPE) (TYPE *)arena_push((PARENT)->arena, sizeof(TYPE))
+#define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)arena_push((PARENT)->arena, (SIZE))
 
 typedef struct string_t string_t;
 struct string_t {
@@ -270,9 +298,7 @@ struct json_t {
 
   json_type_t *root;
 
-  // "arena"
-  uint8_t *mem;
-  uint32_t mem_offset;
+  arena_t *arena;
 };
 
 // TODO: TOKENIZER!?
@@ -309,8 +335,7 @@ struct tokenizer_t {
   string_t source;
   int32_t at;
 
-  uint8_t *mem;
-  int32_t mem_offset;
+  arena_t *arena;
 };
 
 static bool ok(tokenizer_t *tokenizer) {
@@ -617,17 +642,14 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
   return result;
 }
 
-static void json_decode(json_t *json, uint8_t *mem) {
+static void json_decode(json_t *json) {
   if (json->root->kind != JSON_TYPE_KIND_NULL) {
     // already decoded or just null?
     return;
   }
 
-  json->mem = mem;
-
   tokenizer_t tokenizer = { json->source };
-  tokenizer.mem = mem;
-  tokenizer.mem_offset = 2048 * 1024;
+  tokenizer.arena = json->arena;
 
   token_t *token = next_token(&tokenizer);
   if (token->kind == '{') {
@@ -685,17 +707,20 @@ static void json_print(json_t *json) {
   json_print_type(json->root, &depth);
 }
 
+#define KB(N) (N) * 1024
+#define MB(N) (N) * KB(1024)
+
 static json_t decode_json(string_t source) {
+  int64_t capacity = MB(16);
+
+  arena_t *arena = arena_create(capacity);
+
   json_t json = { 0 };
   json.root = &null_type;
   json.source = source;
+  json.arena = arena;
 
-  // allocate "arena"
-  uint32_t size = 4096 * 1024; // 4 mb? probably a smarter way to "guess" a size
-  uint8_t *mem = (uint8_t *)malloc(size);
-  memset(mem, 0, size);
-
-  json_decode(&json, mem);
+  json_decode(&json);
 
   return json;
 }
