@@ -1,3 +1,6 @@
+// TODO: no crt
+//
+
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <ctype.h>
@@ -15,8 +18,14 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#define KB(N) (N) * 1024
+#define MB(N) (N) * KB(1024)
+#define GB(N) (N) * MB(1024)
+
+
 #define TRACE 0
 #define USE_MALLOC 0
+
 
 static uint64_t os_timer_frequency(void) {
   LARGE_INTEGER frequency;
@@ -33,8 +42,6 @@ static uint64_t os_timer_read(void) {
 static uint64_t cpu_timer_read(void) {
   return __rdtsc();
 }
-
-// TODO: no crt
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -183,13 +190,11 @@ static void *arena_push(arena_t *arena, int64_t size) {
 }
 
 #if USE_MALLOC
-
 static void *push(int64_t size) {
   void *result = malloc(size);
   memset(result, 0, size);
   return result;
 }
-
 #define NEW(PARENT, TYPE) (TYPE *)push(sizeof(TYPE))
 #define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)push((SIZE))
 #else
@@ -203,20 +208,22 @@ struct string_t {
   int32_t length;
 };
 
-#define STR(s) (string_t){ (s), (int32_t)strlen((s)) }
+static string_t string_null = { 0, 0 };
+
+#define STR(s) (string_t){ (s), (int32_t)sizeof(s)-1 }
 
 static bool string_equals(string_t a, string_t b) {
-  bool result = false;
+  bool result = true;
 
-  if (a.length == b.length) {
-    int32_t i = 0;
-    for (; i < a.length; i += 1) {
+  if (a.length != b.length) {
+    result = false;
+  } else {
+    for (int32_t i = 0; i < a.length; i += 1) {
       if (a.data[i] != b.data[i]) {
+        result = false;
         break;
       }
     }
-
-    result = (i == a.length);
   }
 
   return result;
@@ -242,16 +249,15 @@ static string_t read_entire_file(char *filename) {
       if (bytes_read != length) {
         fprintf(stderr, "Read %lld bytes, expecteed %ld bytes\n", bytes_read, length);
       }
-      // TODO: WHY?? bytes_read != length
-      // if (bytes_read != length) {
-      //  fclose(file);
-      //  fprintf(stderr, "Failed to read entire file:  %lld != %ld\n", bytes_read, length);
+       if (bytes_read != length) {
+        fclose(file);
+        fprintf(stderr, "Failed to read entire file:  %lld != %ld\n", bytes_read, length);
 
-      //  free(result.data);
-      //  result.data = 0;
-      //} else {
+        free(result.data);
+        result.data = 0;
+      } else {
         result.length = length;
-      //}
+      }
 
       fclose(file);
     }
@@ -265,6 +271,7 @@ enum json_type_kind_t {
   JSON_TYPE_KIND_NONE,
   JSON_TYPE_KIND_NULL,
   JSON_TYPE_KIND_NUMBER,
+  JSON_TYPE_KIND_BOOL,
   JSON_TYPE_KIND_STRING,
   JSON_TYPE_KIND_OBJECT,
   JSON_TYPE_KIND_ARRAY,
@@ -305,6 +312,7 @@ struct json_type_t {
     json_array_t  *array;
     double         number; // TODO: int? float?
     string_t       string;
+    bool           b;
   };
 };
 
@@ -520,6 +528,7 @@ static json_object_property_t null_property = { 0, { "NULL", 4 }, &null_type };
 
 static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer);
 
+// TODO: basically the same as json_begin_array but with names for each "element"
 static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
   json_type_t *result = NEW(json, json_type_t);
   result->kind = JSON_TYPE_KIND_OBJECT;
@@ -575,9 +584,18 @@ static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
       value->number = token->number_double;
 
       prop->value = value;
-    // } else if (token->kind == TOKEN_KIND_BOOL) {
-    //    TODO: ...
-    // }
+    } else if (token->kind == TOKEN_KIND_TRUE) {
+      json_type_t *value = NEW(json, json_type_t);
+      value->kind = JSON_TYPE_KIND_BOOL;
+      value->b = true;
+      
+      prop->value = value;
+    } else if (token->kind == TOKEN_KIND_FALSE) {
+      json_type_t *value = NEW(json, json_type_t);
+      value->kind = JSON_TYPE_KIND_BOOL;
+      value->b = false;
+
+      prop->value = value;
     } else {
       fprintf(stderr, "Unexpected token: \"");
       token_print(token);
@@ -654,9 +672,18 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
       value->number = token->number_double;
 
       array_value->value = value;
-    // } else if (token->kind == TOKEN_KIND_BOOL) {
-    //    TODO: ...
-    // }
+    } else if (token->kind == TOKEN_KIND_TRUE) {
+      json_type_t *value = NEW(json, json_type_t);
+      value->kind = JSON_TYPE_KIND_BOOL;
+      value->b = true;
+      
+      array_value->value = value;
+    } else if (token->kind == TOKEN_KIND_FALSE) {
+      json_type_t *value = NEW(json, json_type_t);
+      value->kind = JSON_TYPE_KIND_BOOL;
+      value->b = false;
+
+      array_value->value = value;
     } else {
       fprintf(stderr, "Unexpected token: \"");
       token_print(token);
@@ -738,9 +765,12 @@ static void json_print_object(json_object_t *it, uint32_t *depth) {
 
 static void json_print_type(json_type_t *it, uint32_t *depth) {
   switch (it->kind) {
-  case JSON_TYPE_KIND_NULL: printf("---"); break;
+  case JSON_TYPE_KIND_NONE:   printf("---"); break;
+  case JSON_TYPE_KIND_NULL:   printf("null"); break;
   case JSON_TYPE_KIND_NUMBER: printf("%f", it->number); break;
+  case JSON_TYPE_KIND_BOOL:   printf("%s", it->b ? "true" : "false"); break;
   case JSON_TYPE_KIND_STRING: printf("%.*s", it->string.length, it->string.data); break;
+
   case JSON_TYPE_KIND_OBJECT:
     *depth += 1;
     json_print_object(it->object, depth);
@@ -757,12 +787,7 @@ static void json_print(json_t *json) {
   json_print_type(json->root, &depth);
 }
 
-#define KB(N) (N) * 1024
-#define MB(N) (N) * KB(1024)
-#define GB(N) (N) * MB(1024)
-
 static json_t decode_json(string_t source) {
-
   json_t json = { 0 };
   json.root = &null_type;
   json.source = source;
@@ -798,53 +823,25 @@ static json_type_t *json_find_property(json_type_t *root, string_t property) {
   return result;
 }
 
-static int decode_data(char *filename, char *answers_filename) {
-  uint64_t os_freq = os_timer_frequency();
+typedef struct Calc_Haversum_Result Calc_Haversum_Result;
+struct Calc_Haversum_Result {
+  double haversum;
+  int64_t num_coords;
+};
 
-  uint64_t cpu_start = cpu_timer_read();
-  uint64_t os_start = os_timer_read();
+static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t *answers) {
+  Calc_Haversum_Result result = { 0, 0 };
 
-  string_t source = read_entire_file(filename);
-  if (source.length == 0) {
-    return 1;
-  }
-  uint64_t timer_read = cpu_timer_read();
-
-  double *answers = NULL;
-  if (answers_filename) {
-    FILE *f = fopen(answers_filename, "rb");
-    if (f) {
-      struct __stat64 stat;
-      _stat64(answers_filename, &stat);
-
-      answers = (double *)malloc(stat.st_size);
-      if (answers) {
-        if (fread(answers, stat.st_size, 1, f) != 1) {
-          fprintf(stderr, "Failed to open answers file: \"%s\"\n", answers_filename);
-          free(answers);
-          answers = NULL;
-        }
-      }
-
-      fclose(f);
-
-      if (!answers) {
-        return 1;
-      }
-    }
-  }
-  uint64_t timer_read_answers = cpu_timer_read();
-
-  json_t json = decode_json(source);
-  uint64_t timer_parse = cpu_timer_read();
-  if (json.root->kind != JSON_TYPE_KIND_NULL) {
-    json_type_t *coords = json_find_property(json.root, STR("coords"));
+  if (root->kind != JSON_TYPE_KIND_NULL) {
+    json_type_t *coords = json_find_property(root, STR("coords"));
     if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
       double avg = 0;
 
       json_array_t *arr = coords->array;
 
-      double *answer = answers;
+      result.num_coords = arr->num_values;
+
+      double *answer = (double *)answers->data;
 
       json_array_value_t *value = arr->values;
       while (value) {
@@ -864,7 +861,7 @@ static int decode_data(char *filename, char *answers_filename) {
           if (answer) {
             if (*answer != haversine) {
               fprintf(stderr, "Expected haversine %f, got %f\n", *answer, haversine);
-              return 1;
+              break;
             }
 
             answer += 1;
@@ -875,60 +872,94 @@ static int decode_data(char *filename, char *answers_filename) {
           value = value->next;
         } else {
           fprintf(stderr, "Failed to parse coord pair\n");
-          return 1;
+          break;
         }
       }
 
-      double haversum = avg / (double) arr->num_values;
+      result.haversum = avg / (double) arr->num_values;
 
-      if (answer && *answer != haversum) {
+      if (answer && *answer != result.haversum) {
         fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
-        return 1;
       }
-
-      uint64_t timer_sum = cpu_timer_read();
-
-      uint64_t os_end = os_timer_read();
-      uint64_t os_elapsed = os_end - os_start;
-      uint64_t cpu_end = cpu_timer_read();
-      uint64_t cpu_elapsed = cpu_end - cpu_start;
-      uint64_t cpu_freq = os_elapsed ? (os_freq * cpu_elapsed / os_elapsed) : 0;
-
-      uint64_t read = timer_read - cpu_start;
-      double read_pct = (double)read / (double)cpu_elapsed * 100.0;
-
-      uint64_t read_answers = timer_read_answers - timer_read;
-      double read_answers_pct = (double)read_answers / (double)cpu_elapsed * 100.0;
-
-      uint64_t parse = timer_parse - timer_read_answers;
-      double parse_pct = (double)parse / (double)cpu_elapsed * 100.0;
-
-      uint64_t sum = timer_sum - timer_parse;
-      double sum_pct = (double)sum / (double)cpu_elapsed * 100.0;
-
-      double total_time = (double)os_elapsed / (double)os_freq * 1000;
-
-      printf("\n");
-      printf("Input size: %d\n", source.length);
-      printf("Pair count: %d\n", arr->num_values);
-      printf("Haversine sum: %f\n", haversum);
-      printf("\n");
-      printf("Total time: %fms (CPU freq %lld)\n", total_time, cpu_freq);
-      // printf("  Startup: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
-      printf("  Read: %lld (%.2f%%)\n", read, read_pct);
-      printf("  Read Answers: %lld (%.2f%%)\n", read_answers, read_answers_pct);
-      printf("  Parse: %lld (%.2f%%)\n", parse, parse_pct);
-      printf("  Sum: %lld (%.2f%%)\n", sum, sum_pct);
-      // printf("  Output: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
     } else {
       fprintf(stderr, "Failed to find \"coords\" array\n");
-      return 1;
     }
   } else {
     // TODO: record error in json
     fprintf(stderr, "Failed to parse json\n");
-    return 1;
   }
+
+  return result;
+}
+
+
+#define TIME(TIMER) \
+uint64_t TIMER = 0; \
+for ( \
+  uint64_t start = cpu_timer_read(); \
+  TIMER == 0; \
+  TIMER = cpu_timer_read() - start \
+) \
+
+static int decode_data(char *filename, char *answers_filename) {
+  string_t source;
+  string_t answers;
+
+  json_t json;
+
+  Calc_Haversum_Result haversum;
+
+
+  uint64_t cpu_start = cpu_timer_read();
+  uint64_t os_start = os_timer_read();
+
+
+  TIME(timer_read) {
+    source = read_entire_file(filename);
+  }
+  if (source.length == 0) return 1;
+
+  TIME(timer_read_answers) {
+    answers = (answers_filename != 0) ? read_entire_file(answers_filename) : string_null;
+  }
+  if (answers_filename && answers.length == 0) return 1;
+
+  TIME(timer_parse) {
+    json = decode_json(source);
+  }
+
+  TIME(timer_sum) {
+    haversum = calc_haversum(json.root, &answers);
+  }
+
+  uint64_t cpu_end = cpu_timer_read();
+  uint64_t cpu_elapsed = cpu_end - cpu_start;
+
+  uint64_t os_freq = os_timer_frequency();
+  uint64_t os_end = os_timer_read();
+  uint64_t os_elapsed = os_end - os_start;
+
+  uint64_t cpu_freq = os_elapsed ? (os_freq * cpu_elapsed / os_elapsed) : 0;
+
+  double read_pct = (double)timer_read / (double)cpu_elapsed * 100.0;
+  double read_answers_pct = (double)timer_read_answers / (double)cpu_elapsed * 100.0;
+  double parse_pct = (double)timer_parse / (double)cpu_elapsed * 100.0;
+  double sum_pct = (double)timer_sum / (double)cpu_elapsed * 100.0;
+
+  double total_time = (double)os_elapsed / (double)os_freq * 1000;
+
+  printf("\n");
+  printf("Input size: %d\n", source.length);
+  printf("Pair count: %lld\n", haversum.num_coords);
+  printf("Haversine sum: %f\n", haversum.haversum);
+  printf("\n");
+  printf("Total time: %fms (CPU freq %lld)\n", total_time, cpu_freq);
+  // printf("  Startup: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
+  printf("  Read: %lld (%.2f%%)\n", timer_read, read_pct);
+  printf("  Read Answers: %lld (%.2f%%)\n", timer_read_answers, read_answers_pct);
+  printf("  Parse: %lld (%.2f%%)\n", timer_parse, parse_pct);
+  printf("  Sum: %lld (%.2f%%)\n", timer_sum, sum_pct);
+  // printf("  Output: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
 
   return 0;
 }
