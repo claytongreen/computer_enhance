@@ -1,4 +1,5 @@
 build/
+.vs/
 
 *.json
 *.f64

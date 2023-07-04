@@ -1,4 +1,4 @@
-// TODO: no crt
+// TODO: no crt??
 //
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -15,33 +15,23 @@
 #include <sys/stat.h>
 
 #include <intrin.h>
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
 
 #define KB(N) (N) * 1024
 #define MB(N) (N) * KB(1024)
 #define GB(N) (N) * MB(1024)
 
+// TODO
+#define ASSERT(...)
 
 #define TRACE 0
-#define USE_MALLOC 0
 
+#include "os.h"
+#include "me_arena.h"
 
-static uint64_t os_timer_frequency(void) {
-  LARGE_INTEGER frequency;
-  QueryPerformanceFrequency(&frequency);
-  return frequency.QuadPart;
-}
+#include "os.c"
+#include "me_arena.c"
 
-static uint64_t os_timer_read(void) {
-  LARGE_INTEGER value;
-  QueryPerformanceCounter(&value);
-  return value.QuadPart;
-}
-
-static uint64_t cpu_timer_read(void) {
-  return __rdtsc();
-}
+#include "profile.c"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -157,51 +147,6 @@ static int generate_data(int32_t seed, int32_t num_coord_pairs) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-typedef struct arena_t arena_t;
-struct arena_t {
-  uint8_t *memory;
-  int64_t at;
-  int64_t capacity;
-};
-
-static arena_t null_arena = { 0, 0, 0 };
-
-static arena_t *arena_create(int64_t capacity) {
-  arena_t *result = &null_arena;
-
-  void *memory = malloc(capacity);
-  if (memory) {
-    result = (arena_t *)memory;
-    result->memory  = memory;
-    result->at = sizeof(arena_t);
-    result->capacity = capacity;
-  }
-
-  return result;
-}
-
-static void *arena_push(arena_t *arena, int64_t size) {
-  assert(arena->at + size < arena->capacity);
-
-  void *result = arena->memory + arena->at;
-  arena->at += size;
-
-  return result;
-}
-
-#if USE_MALLOC
-static void *push(int64_t size) {
-  void *result = malloc(size);
-  memset(result, 0, size);
-  return result;
-}
-#define NEW(PARENT, TYPE) (TYPE *)push(sizeof(TYPE))
-#define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)push((SIZE))
-#else
-#define NEW(PARENT, TYPE) (TYPE *)arena_push((PARENT)->arena, sizeof(TYPE))
-#define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)arena_push((PARENT)->arena, (SIZE))
-#endif
-
 typedef struct string_t string_t;
 struct string_t {
   char *data;
@@ -229,38 +174,43 @@ static bool string_equals(string_t a, string_t b) {
   return result;
 }
 
+// TODO: arena
 static string_t read_entire_file(char *filename) {
   string_t result = { 0 };
 
-  FILE *file = fopen(filename, "rb");
-  if (!file) {
-    fprintf(stderr, "Failed to open file: '%s'\n", filename);
-  } else {
-    fseek(file, 0, SEEK_END);
-    long length = ftell(file);
+  if (filename != 0) {
+      PROFILE_ENTER(read_entire_file);
 
-    result.data = (char *)malloc(length);
-    if (!result.data) {
-      fclose(file);
-      fprintf(stderr, "Failed to allocate data for file: %ld\n", length);
-    } else {
-      fseek(file, 0, SEEK_SET);
-      size_t bytes_read = fread(result.data, 1, length, file);
-      if (bytes_read != length) {
-        fprintf(stderr, "Read %lld bytes, expecteed %ld bytes\n", bytes_read, length);
-      }
-       if (bytes_read != length) {
-        fclose(file);
-        fprintf(stderr, "Failed to read entire file:  %lld != %ld\n", bytes_read, length);
-
-        free(result.data);
-        result.data = 0;
+      FILE *file = fopen(filename, "rb");
+      if (!file) {
+          fprintf(stderr, "Failed to open file: '%s'\n", filename);
       } else {
-        result.length = length;
+          fseek(file, 0, SEEK_END);
+          long length = ftell(file);
+
+          result.data = (char *)malloc(length);
+          if (!result.data) {
+              fclose(file);
+              fprintf(stderr, "Failed to allocate data for file: %ld\n", length);
+          } else {
+              fseek(file, 0, SEEK_SET);
+
+              size_t bytes_read = fread(result.data, 1, length, file);
+              if (bytes_read != length) {
+                  fclose(file);
+                  fprintf(stderr, "Failed to read entire file:  %lld != %ld\n", bytes_read, length);
+
+                  free(result.data);
+                  result.data = 0;
+              } else {
+                  result.length = length;
+              }
+
+              fclose(file);
+          }
       }
 
-      fclose(file);
-    }
+      PROFILE_LEAVE(read_entire_file);
   }
 
   return result;
@@ -322,7 +272,7 @@ struct json_t {
 
   json_type_t *root;
 
-  arena_t *arena;
+  Arena *arena;
 };
 
 // TODO: TOKENIZER!?
@@ -359,7 +309,7 @@ struct tokenizer_t {
   string_t source;
   int32_t at;
 
-  arena_t *arena;
+  Arena *arena;
 };
 
 static bool ok(tokenizer_t *tokenizer) {
@@ -428,6 +378,9 @@ static void token_print(token_t *token) {
   default: printf("%c", (char)token->kind); break;
   }
 }
+
+#define NEW(PARENT, TYPE) (TYPE *)me_arena_push_zero((PARENT)->arena, sizeof(TYPE))
+#define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)me_arena_push_zero((PARENT)->arena, (SIZE))
 
 static token_t *next_token(tokenizer_t *tokenizer) {
   token_t *token = NEW(tokenizer, token_t);
@@ -718,24 +671,25 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
 }
 
 static void json_decode(json_t *json) {
-  if (json->root->kind != JSON_TYPE_KIND_NULL) {
-    // already decoded or just null?
-    return;
-  }
+  PROFILE_ENTER(json_decode);
 
-  tokenizer_t tokenizer = { json->source };
-#if !USE_MALLOC
-  tokenizer.arena = json->arena;
-#endif
+  if (json->root->kind == JSON_TYPE_KIND_NULL) {
+    tokenizer_t tokenizer = { json->source };
+    tokenizer.arena = json->arena;
 
-  token_t *token = next_token(&tokenizer);
-  if (token->kind == '{') {
-    json->root = json_begin_object(json, &tokenizer);
-  } else if (token->kind == ']') {
-    json->root = json_begin_array(json, &tokenizer);
+    token_t *token = next_token(&tokenizer);
+    if (token->kind == '{') {
+      json->root = json_begin_object(json, &tokenizer);
+    } else if (token->kind == ']') {
+      json->root = json_begin_array(json, &tokenizer);
+    } else {
+      // TODO: error
+    }
   } else {
-    // TODO: error
+    // TODO: error, already decoded
   }
+
+  PROFILE_LEAVE(json_decode);
 }
 
 static void json_print_type(json_type_t *it, uint32_t *depth);
@@ -787,22 +741,6 @@ static void json_print(json_t *json) {
   json_print_type(json->root, &depth);
 }
 
-static json_t decode_json(string_t source) {
-  json_t json = { 0 };
-  json.root = &null_type;
-  json.source = source;
-
-#if !USE_MALLOC
-  int64_t capacity = GB(1);
-  arena_t *arena = arena_create(capacity);
-  json.arena = arena;
-#endif
-
-  json_decode(&json);
-
-  return json;
-}
-
 static json_type_t *json_find_property(json_type_t *root, string_t property) {
   json_type_t *result = &null_type;
 
@@ -830,11 +768,15 @@ struct Calc_Haversum_Result {
 };
 
 static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t *answers) {
+  PROFILE_ENTER(calc_haversum);
+
   Calc_Haversum_Result result = { 0, 0 };
 
   if (root->kind != JSON_TYPE_KIND_NULL) {
     json_type_t *coords = json_find_property(root, STR("coords"));
     if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
+      PROFILE_ENTER(calc_haversum_loop);
+
       double avg = 0;
 
       json_array_t *arr = coords->array;
@@ -881,6 +823,8 @@ static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t *answers) 
       if (answer && *answer != result.haversum) {
         fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
       }
+
+      PROFILE_LEAVE(calc_haversum_loop);
     } else {
       fprintf(stderr, "Failed to find \"coords\" array\n");
     }
@@ -889,77 +833,37 @@ static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t *answers) 
     fprintf(stderr, "Failed to parse json\n");
   }
 
+  PROFILE_LEAVE(calc_haversum);
+
   return result;
 }
 
-
-#define TIME(TIMER) \
-uint64_t TIMER = 0; \
-for ( \
-  uint64_t start = cpu_timer_read(); \
-  TIMER == 0; \
-  TIMER = cpu_timer_read() - start \
-) \
-
 static int decode_data(char *filename, char *answers_filename) {
+  PROFILE_START();
+
   string_t source;
   string_t answers;
 
-  json_t json;
-
   Calc_Haversum_Result haversum;
 
+  Arena *arena = me_arena_create();
 
-  uint64_t cpu_start = cpu_timer_read();
-  uint64_t os_start = os_timer_read();
-
-
-  TIME(timer_read) {
-    source = read_entire_file(filename);
-  }
+  source = read_entire_file(filename);
   if (source.length == 0) return 1;
 
-  TIME(timer_read_answers) {
-    answers = (answers_filename != 0) ? read_entire_file(answers_filename) : string_null;
-  }
+  answers = read_entire_file(answers_filename);
   if (answers_filename && answers.length == 0) return 1;
 
-  TIME(timer_parse) {
-    json = decode_json(source);
-  }
+  json_t *json = (json_t *)me_arena_push_zero(arena, sizeof(json_t));
+  json->root = &null_type;
+  json->source = source;
+  json->arena = arena;
+  json_decode(json);
+  // TODO: check json error?
 
-  TIME(timer_sum) {
-    haversum = calc_haversum(json.root, &answers);
-  }
+  haversum = calc_haversum(json->root, &answers);
 
-  uint64_t cpu_end = cpu_timer_read();
-  uint64_t cpu_elapsed = cpu_end - cpu_start;
-
-  uint64_t os_freq = os_timer_frequency();
-  uint64_t os_end = os_timer_read();
-  uint64_t os_elapsed = os_end - os_start;
-
-  uint64_t cpu_freq = os_elapsed ? (os_freq * cpu_elapsed / os_elapsed) : 0;
-
-  double read_pct = (double)timer_read / (double)cpu_elapsed * 100.0;
-  double read_answers_pct = (double)timer_read_answers / (double)cpu_elapsed * 100.0;
-  double parse_pct = (double)timer_parse / (double)cpu_elapsed * 100.0;
-  double sum_pct = (double)timer_sum / (double)cpu_elapsed * 100.0;
-
-  double total_time = (double)os_elapsed / (double)os_freq * 1000;
-
-  printf("\n");
-  printf("Input size: %d\n", source.length);
-  printf("Pair count: %lld\n", haversum.num_coords);
-  printf("Haversine sum: %f\n", haversum.haversum);
-  printf("\n");
-  printf("Total time: %fms (CPU freq %lld)\n", total_time, cpu_freq);
-  // printf("  Startup: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
-  printf("  Read: %lld (%.2f%%)\n", timer_read, read_pct);
-  printf("  Read Answers: %lld (%.2f%%)\n", timer_read_answers, read_answers_pct);
-  printf("  Parse: %lld (%.2f%%)\n", timer_parse, parse_pct);
-  printf("  Sum: %lld (%.2f%%)\n", timer_sum, sum_pct);
-  // printf("  Output: %lld (%.2f%%)\n", (uint64_t)0, 0.0); ???
+  PROFILE_END();
 
   return 0;
 }
@@ -978,6 +882,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  os_init();
+
   char *command = argv[1];
 
   if (strcmp(command, "generate") == 0 && argc == 4) {
@@ -995,4 +901,3 @@ int main(int argc, char **argv) {
     return 1;
   }
 }
-
