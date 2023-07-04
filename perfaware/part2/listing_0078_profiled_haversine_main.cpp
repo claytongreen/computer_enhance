@@ -11,7 +11,7 @@
    ======================================================================== */
 
 /* ========================================================================
-   LISTING 75
+   LISTING 78
    ======================================================================== */
 
 /* NOTE(casey): _CRT_SECURE_NO_WARNINGS is here because otherwise we cannot
@@ -38,19 +38,23 @@ typedef int32_t b32;
 typedef float f32;
 typedef double f64;
 
+#define ArrayCount(Array) (sizeof(Array)/sizeof((Array)[0]))
+
 struct haversine_pair
 {
     f64 X0, Y0;
     f64 X1, Y1;
 };
 
-#include "listing_0074_platform_metrics.cpp"
+#include "listing_0076_simple_profiler.cpp"
 #include "listing_0065_haversine_formula.cpp"
 #include "listing_0068_buffer.cpp"
-#include "listing_0069_lookup_json_parser.cpp"
+#include "listing_0077_profiled_lookup_json_parser.cpp"
 
 static buffer ReadEntireFile(char *FileName)
 {
+    TimeFunction;
+    
     buffer Result = {};
         
     FILE *File = fopen(FileName, "rb");
@@ -84,6 +88,8 @@ static buffer ReadEntireFile(char *FileName)
 
 static f64 SumHaversineDistances(u64 PairCount, haversine_pair *Pairs)
 {
+    TimeFunction;
+    
     f64 Sum = 0;
     
     f64 SumCoef = 1 / (f64)PairCount;
@@ -98,32 +104,15 @@ static f64 SumHaversineDistances(u64 PairCount, haversine_pair *Pairs)
     return Sum;
 }
 
-static void PrintTimeElapsed(char const *Label, u64 TotalTSCElapsed, u64 Begin, u64 End)
-{
-    u64 Elapsed = End - Begin;
-    f64 Percent = 100.0 * ((f64)Elapsed / (f64)TotalTSCElapsed);
-    printf("  %s: %llu (%.2f%%)\n", Label, Elapsed, Percent);
-}
-
 int main(int ArgCount, char **Args)
 {
-    u64 Prof_Begin = 0;
-    u64 Prof_Read = 0;
-    u64 Prof_MiscSetup = 0;
-    u64 Prof_Parse = 0;
-    u64 Prof_Sum = 0;
-    u64 Prof_MiscOutput = 0;
-    u64 Prof_End = 0;
-    
-    Prof_Begin = ReadCPUTimer();
-    
+    BeginProfile();
+	
     int Result = 1;
     
     if((ArgCount == 2) || (ArgCount == 3))
     {
-        Prof_Read = ReadCPUTimer();
         buffer InputJSON = ReadEntireFile(Args[1]);
-        Prof_MiscSetup = ReadCPUTimer();
         
         u32 MinimumJSONPairEncoding = 6*4;
         u64 MaxPairCount = InputJSON.Count / MinimumJSONPairEncoding;
@@ -133,15 +122,12 @@ int main(int ArgCount, char **Args)
             if(ParsedValues.Count)
             {
                 haversine_pair *Pairs = (haversine_pair *)ParsedValues.Data;
-                
-                Prof_Parse = ReadCPUTimer();
+				
                 u64 PairCount = ParseHaversinePairs(InputJSON, MaxPairCount, Pairs);
-                Prof_Sum = ReadCPUTimer();
                 f64 Sum = SumHaversineDistances(PairCount, Pairs);
-                Prof_MiscOutput = ReadCPUTimer();
                 
-                Result = 0;
-                
+				Result = 0;
+
                 fprintf(stdout, "Input size: %llu\n", InputJSON.Count);
                 fprintf(stdout, "Pair count: %llu\n", PairCount);
                 fprintf(stdout, "Haversine sum: %.16f\n", Sum);
@@ -176,7 +162,7 @@ int main(int ArgCount, char **Args)
         {
             fprintf(stderr, "ERROR: Malformed input JSON\n");
         }
-        
+
         FreeBuffer(&InputJSON);
     }
     else
@@ -184,26 +170,13 @@ int main(int ArgCount, char **Args)
         fprintf(stderr, "Usage: %s [haversine_input.json]\n", Args[0]);
         fprintf(stderr, "       %s [haversine_input.json] [answers.f64]\n", Args[0]);
     }
-    
-    Prof_End = ReadCPUTimer();
-    
+
     if(Result == 0)
-    {
-        u64 TotalCPUElapsed = Prof_End - Prof_Begin;
-        
-        u64 CPUFreq = EstimateCPUTimerFreq();
-        if(CPUFreq)
-        {
-            printf("\nTotal time: %0.4fms (CPU freq %llu)\n", 1000.0 * (f64)TotalCPUElapsed / (f64)CPUFreq, CPUFreq);
-        }
-        
-        PrintTimeElapsed("Startup", TotalCPUElapsed, Prof_Begin, Prof_Read);
-        PrintTimeElapsed("Read", TotalCPUElapsed, Prof_Read, Prof_MiscSetup);
-        PrintTimeElapsed("MiscSetup", TotalCPUElapsed, Prof_MiscSetup, Prof_Parse);
-        PrintTimeElapsed("Parse", TotalCPUElapsed, Prof_Parse, Prof_Sum);
-        PrintTimeElapsed("Sum", TotalCPUElapsed, Prof_Sum, Prof_MiscOutput);
-        PrintTimeElapsed("MiscOutput", TotalCPUElapsed, Prof_MiscOutput, Prof_End);
-    }
-    
+	{
+        EndAndPrintProfile();
+	}
+		
     return Result;
 }
+
+static_assert(__COUNTER__ < ArrayCount(profiler::Anchors), "Number of profile points exceeds size of profiler::Anchors array");
