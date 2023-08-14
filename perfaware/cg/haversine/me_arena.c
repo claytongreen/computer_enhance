@@ -1,9 +1,6 @@
 #include "me_arena.h"
 #include "os.h"
 
-// TODO
-#define ASSERT(...)
-
 static uint64_t align_up(uint64_t x) {
   uint64_t result = x + (~x & 63);
   return result;

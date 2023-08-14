@@ -18,8 +18,10 @@ rem call cl /nologo /Zi /O2 /FC ..\disasm\main.cpp /Fedisasm.exe
 rem call cl /nologo /Zi /FC ..\disasm\main.cpp /Fedisasm.exe
 rem call cl /nologo /Zi /FC ..\disasm\main-gui.cpp /Fedisasm-gui.exe /link C:\dev\raylib-4.5.0_win64_msvc16\lib\raylibdll.lib
 
-call cl /nologo /std:c11 /Zi /Od /W4 ..\haversine.c /Fehaversine-debug.exe /DDEBUG
+call cl /nologo /std:c11 /Zi /Od /W4 ..\haversine.c /Fehaversine-debug.exe /D_DEBUG
+call cl /nologo /std:c11 /Zi /Od /W4 ..\haversine.c /Fehaversine-debug-profile.exe /D_DEBUG /DPROFILE=1
 call cl /nologo /std:c11 /Zi /O2 /W4 ..\haversine.c /Fehaversine-release.exe
+call cl /nologo /std:c11 /Zi /O2 /W4 ..\haversine.c /Fehaversine-release-profile.exe /DPROFILE=1
 
 popd
 

@@ -20,8 +20,11 @@
 #define MB(N) (N) * KB(1024)
 #define GB(N) (N) * MB(1024)
 
-// TODO
-#define ASSERT(...)
+#ifdef _DEBUG
+#define ASSERT(Cond) do { if(!(Cond)) __debugbreak(); } while (0)
+#else
+#define ASSERT(Cond) ((void)(Cond))
+#endif
 
 #define TRACE 0
 
@@ -178,39 +181,38 @@ static bool string_equals(string_t a, string_t b) {
 static string_t read_entire_file(char *filename) {
   string_t result = { 0 };
 
-  if (filename != 0) {
-      PROFILE_ENTER(read_entire_file);
+  PROFILE_FUNC()
+  {
+    if (filename != 0) {
+        FILE *file = fopen(filename, "rb");
+        if (!file) {
+            fprintf(stderr, "Failed to open file: '%s'\n", filename);
+        } else {
+            fseek(file, 0, SEEK_END);
+            long length = ftell(file);
 
-      FILE *file = fopen(filename, "rb");
-      if (!file) {
-          fprintf(stderr, "Failed to open file: '%s'\n", filename);
-      } else {
-          fseek(file, 0, SEEK_END);
-          long length = ftell(file);
+            result.data = (char *)malloc(length);
+            if (!result.data) {
+                fclose(file);
+                fprintf(stderr, "Failed to allocate data for file: %ld\n", length);
+            } else {
+                fseek(file, 0, SEEK_SET);
 
-          result.data = (char *)malloc(length);
-          if (!result.data) {
-              fclose(file);
-              fprintf(stderr, "Failed to allocate data for file: %ld\n", length);
-          } else {
-              fseek(file, 0, SEEK_SET);
+                size_t bytes_read = fread(result.data, 1, length, file);
+                if (bytes_read != length) {
+                    fclose(file);
+                    fprintf(stderr, "Failed to read entire file:  %zd != %ld\n", bytes_read, length);
 
-              size_t bytes_read = fread(result.data, 1, length, file);
-              if (bytes_read != length) {
-                  fclose(file);
-                  fprintf(stderr, "Failed to read entire file:  %lld != %ld\n", bytes_read, length);
+                    free(result.data);
+                    result.data = 0;
+                } else {
+                    result.length = length;
+                }
 
-                  free(result.data);
-                  result.data = 0;
-              } else {
-                  result.length = length;
-              }
-
-              fclose(file);
-          }
-      }
-
-      PROFILE_LEAVE(read_entire_file);
+                fclose(file);
+            }
+        }
+    }
   }
 
   return result;
@@ -329,7 +331,7 @@ static uint8_t peek(tokenizer_t *tokenizer) {
 }
 
 static bool is_whitespace(char c) {
-  bool result = c == ' ' || c == '\t' || c == '\n' || c == '\r';
+  bool result = (c == ' ') || (c == '\t') || (c == '\n') || (c == '\r');
   return result;
 }
 
@@ -383,7 +385,9 @@ static void token_print(token_t *token) {
 #define NEW_SIZE(PARENT, TYPE, SIZE) (TYPE *)me_arena_push_zero((PARENT)->arena, (SIZE))
 
 static token_t *next_token(tokenizer_t *tokenizer) {
-  token_t *token = NEW(tokenizer, token_t);
+  token_t *token = NULL;
+
+  token = NEW(tokenizer, token_t);
 
   eat_whitespace(tokenizer);
 
@@ -467,6 +471,7 @@ static token_t *next_token(tokenizer_t *tokenizer) {
       }
     }
   }
+
 
 #if TRACE
   token_print(token);
@@ -554,12 +559,12 @@ static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
       token_print(token);
       printf("\" @ %d\n", tokenizer->at);
       result->kind = JSON_TYPE_KIND_NONE;
-      return result;
+      break;
     }
 
     if (prop->value->kind == JSON_TYPE_KIND_NONE){
       result->kind = JSON_TYPE_KIND_NONE;
-      return result;
+      break;
     }
 
     token = next_token(tokenizer);
@@ -575,7 +580,7 @@ static json_type_t *json_begin_object(json_t *json, tokenizer_t *tokenizer) {
       token_print(token);
       printf("\" @ %d\n", tokenizer->at);
       result->kind = JSON_TYPE_KIND_NONE;
-      return result;
+      break;
     }
   }
 
@@ -642,12 +647,12 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
       token_print(token);
       printf("\" @ %d\n", tokenizer->at);
       result->kind = JSON_TYPE_KIND_NONE;
-      return result;
+      break;
     }
 
     if (array_value->value->kind == JSON_TYPE_KIND_NONE){
       result->kind = JSON_TYPE_KIND_NONE;
-      return result;
+      break;
     }
 
     token = next_token(tokenizer);
@@ -663,7 +668,7 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
       token_print(token);
       printf("\" @ %d\n", tokenizer->at);
       result->kind = JSON_TYPE_KIND_NONE;
-      return result;
+      break;
     }
   }
 
@@ -671,25 +676,24 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
 }
 
 static void json_decode(json_t *json) {
-  PROFILE_ENTER(json_decode);
+  PROFILE_FUNC()
+  {
+    if (json->root->kind == JSON_TYPE_KIND_NULL) {
+      tokenizer_t tokenizer = { json->source };
+      tokenizer.arena = json->arena;
 
-  if (json->root->kind == JSON_TYPE_KIND_NULL) {
-    tokenizer_t tokenizer = { json->source };
-    tokenizer.arena = json->arena;
-
-    token_t *token = next_token(&tokenizer);
-    if (token->kind == '{') {
-      json->root = json_begin_object(json, &tokenizer);
-    } else if (token->kind == ']') {
-      json->root = json_begin_array(json, &tokenizer);
+      token_t *token = next_token(&tokenizer);
+      if (token->kind == '{') {
+        json->root = json_begin_object(json, &tokenizer);
+      } else if (token->kind == ']') {
+        json->root = json_begin_array(json, &tokenizer);
+      } else {
+        // TODO: error
+      }
     } else {
-      // TODO: error
+      // TODO: error, already decoded
     }
-  } else {
-    // TODO: error, already decoded
   }
-
-  PROFILE_LEAVE(json_decode);
 }
 
 static void json_print_type(json_type_t *it, uint32_t *depth);
@@ -767,103 +771,112 @@ struct Calc_Haversum_Result {
   int64_t num_coords;
 };
 
-static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t *answers) {
-  PROFILE_ENTER(calc_haversum);
-
+static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t answers) {
   Calc_Haversum_Result result = { 0, 0 };
 
-  if (root->kind != JSON_TYPE_KIND_NULL) {
-    json_type_t *coords = json_find_property(root, STR("coords"));
-    if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
-      PROFILE_ENTER(calc_haversum_loop);
+  PROFILE_FUNC()
+  {
+    if (root->kind != JSON_TYPE_KIND_NULL) {
+      json_type_t *coords = json_find_property(root, STR("coords"));
+      if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
+        {
+          double avg = 0;
 
-      double avg = 0;
+          json_array_t *arr = coords->array;
 
-      json_array_t *arr = coords->array;
+          result.num_coords = arr->num_values;
 
-      result.num_coords = arr->num_values;
+          double *answer = (double *)answers.data;
 
-      double *answer = (double *)answers->data;
+          json_array_value_t *value = arr->values;
+          PROFILE_BLOCK("calc_haversum_loop")
+          while (value) {
+            json_type_t *x0 = json_find_property(value->value, STR("x0"));
+            json_type_t *y0 = json_find_property(value->value, STR("y0"));
+            json_type_t *x1 = json_find_property(value->value, STR("x1"));
+            json_type_t *y1 = json_find_property(value->value, STR("y1"));
 
-      json_array_value_t *value = arr->values;
-      while (value) {
-        json_type_t *x0 = json_find_property(value->value, STR("x0"));
-        json_type_t *y0 = json_find_property(value->value, STR("y0"));
-        json_type_t *x1 = json_find_property(value->value, STR("x1"));
-        json_type_t *y1 = json_find_property(value->value, STR("y1"));
+            if (
+              x0 && x0->kind == JSON_TYPE_KIND_NUMBER &&
+              y0 && y0->kind == JSON_TYPE_KIND_NUMBER &&
+              x1 && x1->kind == JSON_TYPE_KIND_NUMBER &&
+              y1 && y1->kind == JSON_TYPE_KIND_NUMBER
+            ) {
+              double haversine = ReferenceHaversine(x0->number, y0->number, x1->number, y1->number, EARTH_RADIUS);
 
-        if (
-          x0 && x0->kind == JSON_TYPE_KIND_NUMBER &&
-          y0 && y0->kind == JSON_TYPE_KIND_NUMBER &&
-          x1 && x1->kind == JSON_TYPE_KIND_NUMBER &&
-          y1 && y1->kind == JSON_TYPE_KIND_NUMBER
-        ) {
-          double haversine = ReferenceHaversine(x0->number, y0->number, x1->number, y1->number, EARTH_RADIUS);
+              if (answer) {
+                if (*answer != haversine) {
+                  fprintf(stderr, "Expected haversine %f, got %f\n", *answer, haversine);
+                  break;
+                }
 
-          if (answer) {
-            if (*answer != haversine) {
-              fprintf(stderr, "Expected haversine %f, got %f\n", *answer, haversine);
+                answer += 1;
+              }
+
+              avg += haversine;
+
+              value = value->next;
+            } else {
+              fprintf(stderr, "Failed to parse coord pair\n");
               break;
             }
-
-            answer += 1;
           }
 
-          avg += haversine;
+          result.haversum = avg / (double) arr->num_values;
 
-          value = value->next;
-        } else {
-          fprintf(stderr, "Failed to parse coord pair\n");
-          break;
+          if (answer && *answer != result.haversum) {
+            fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
+          }
         }
+      } else {
+        fprintf(stderr, "Failed to find \"coords\" array\n");
       }
-
-      result.haversum = avg / (double) arr->num_values;
-
-      if (answer && *answer != result.haversum) {
-        fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
-      }
-
-      PROFILE_LEAVE(calc_haversum_loop);
     } else {
-      fprintf(stderr, "Failed to find \"coords\" array\n");
+      // TODO: record error in json
+      fprintf(stderr, "Failed to parse json\n");
     }
-  } else {
-    // TODO: record error in json
-    fprintf(stderr, "Failed to parse json\n");
   }
-
-  PROFILE_LEAVE(calc_haversum);
 
   return result;
 }
 
+static void json_free(json_t *json) {
+  PROFILE_FUNC() {
+    me_arena_destroy(json->arena);
+    json = NULL;
+  }
+}
+
 static int decode_data(char *filename, char *answers_filename) {
-  PROFILE_START();
-
-  string_t source;
-  string_t answers;
-
-  Calc_Haversum_Result haversum;
+  profile_start();
 
   Arena *arena = me_arena_create();
 
-  source = read_entire_file(filename);
-  if (source.length == 0) return 1;
+  string_t source = read_entire_file(filename);
+  if (source.length != 0) {
+    string_t answers = { 0 };
+    if (answers_filename) {
+      answers = read_entire_file(answers_filename);
+      // TODO: error out if we can't load?
+    }
 
-  answers = read_entire_file(answers_filename);
-  if (answers_filename && answers.length == 0) return 1;
+    json_t *json = (json_t *)me_arena_push_zero(arena, sizeof(json_t));
+    json->root = &null_type;
+    json->source = source;
+    json->arena = arena;
+    json_decode(json);
+    // TODO: check json error?
 
-  json_t *json = (json_t *)me_arena_push_zero(arena, sizeof(json_t));
-  json->root = &null_type;
-  json->source = source;
-  json->arena = arena;
-  json_decode(json);
-  // TODO: check json error?
+    Calc_Haversum_Result haversum = calc_haversum(json->root, answers);
+    printf("\n");
+    printf("Read %lld coordinate pairs\n", haversum.num_coords);
+    printf("Averge haversum: %f\n", haversum.haversum);
+    printf("\n");
 
-  haversum = calc_haversum(json->root, &answers);
+    json_free(json);
+  }
 
-  PROFILE_END();
+  profile_end();
 
   return 0;
 }
