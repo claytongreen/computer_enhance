@@ -32,7 +32,7 @@ static uint64_t estimate_cpu_timer_freq() {
 }
 
 #ifndef PROFILE
-#define PROFILE 0
+#define PROFILE 1
 #endif
 
 #if PROFILE
@@ -40,26 +40,28 @@ static uint64_t estimate_cpu_timer_freq() {
 #define CONCAT2(A, B) A##B
 #define CONCAT(A, B) CONCAT2(A, B)
 
-#define PROFILE_BLOCK_NAME CONCAT(profile_block_, __LINE__)
+#define TIME_BLOCK_NAME CONCAT(profile_block_, __LINE__)
 
-#define PROFILE_BLOCK_BEGIN(NAME) Profile_Block PROFILE_BLOCK_NAME = profile_enter((NAME), (__COUNTER__ + 1))
-#define PROFILE_BLOCK_END(BLOCK) profile_leave(BLOCK)
+#define TIME_BLOCK_BEGIN(NAME, BYTES) Profile_Block TIME_BLOCK_NAME = profile_enter((NAME), (__COUNTER__ + 1), BYTES)
+#define TIME_BLOCK_END(BLOCK) profile_leave(BLOCK)
 
-#define PROFILE_BLOCK(NAME) \
+#define TIME_BANDWIDTH(NAME, BYTES) \
 for(\
-PROFILE_BLOCK_BEGIN(NAME); \
-PROFILE_BLOCK_NAME.i < 1;\
-PROFILE_BLOCK_NAME.i += (PROFILE_BLOCK_END(PROFILE_BLOCK_NAME), 1)\
+TIME_BLOCK_BEGIN(NAME, BYTES); \
+TIME_BLOCK_NAME.i < 1; \
+TIME_BLOCK_NAME.i += (TIME_BLOCK_END(TIME_BLOCK_NAME), 1)\
 )
 
-#define PROFILE_FUNC() PROFILE_BLOCK(__func__)
+#define TIME_BLOCK(NAME) TIME_BANDWIDTH(NAME, 0)
+#define TIME_FUNC() TIME_BLOCK(__func__)
 
 typedef struct Profile_Point Profile_Point;
 struct Profile_Point {
   uint32_t hit_count;
 
-  uint64_t tsc_elapsed_inclusive;
-  uint64_t tsc_elapsed_exclusive;
+  uint64_t tsc_elapsed_inclusive; // DOES     include children
+  uint64_t tsc_elapsed_exclusive; // does NOT include children
+  uint64_t processed_byte_count;
 
   int32_t parent;
 
@@ -68,7 +70,7 @@ struct Profile_Point {
 
 typedef struct Profile_Block Profile_Block;
 struct Profile_Block {
-  // used in the PROFILE_BLOCK macro for hacky defer garbage
+  // used in the TIME_BLOCK macro for hacky defer garbage
   int8_t i;
 
   int32_t parent_index;
@@ -85,10 +87,12 @@ static Profile_Point points[MAX_PROFILE_POINTS];
 static int32_t num_points;
 static int32_t active_block;
 
-static Profile_Block profile_enter(char *name, int32_t point_index) {
+static Profile_Block profile_enter(char *name, int32_t point_index, uint64_t byte_count) {
   ASSERT(point_index < MAX_PROFILE_POINTS);
 
   Profile_Point *point = points + point_index;
+
+  point->processed_byte_count += byte_count;
 
   Profile_Block block = {
     .i = 0,
@@ -112,20 +116,20 @@ static Profile_Block profile_enter(char *name, int32_t point_index) {
 static void profile_leave(Profile_Block block) {
   uint64_t tsc_elapsed = cpu_timer_read() - block.tsc_start;
 
+  active_block = block.parent_index;
+
   Profile_Point *parent = points + block.parent_index;
   Profile_Point *point  = points + block.point_index;
 
   parent->tsc_elapsed_exclusive -= tsc_elapsed;
-  point->tsc_elapsed_exclusive += tsc_elapsed;
-  point->tsc_elapsed_inclusive = block.old_tsc_elapsed_inclusive + tsc_elapsed;
+  point->tsc_elapsed_exclusive  += tsc_elapsed;
+  point->tsc_elapsed_inclusive   = block.old_tsc_elapsed_inclusive + tsc_elapsed;
 
   point->hit_count += 1;
   point->name = block.name;
-
-  active_block = block.parent_index;
 }
 
-static void profile_print_blocks(uint64_t cpu_duration) {
+static void profile_print_blocks(uint64_t cpu_duration, uint64_t cpu_freq) {
   double pct_denom = 1 / (double)cpu_duration * 100.0;
 
   for (int32_t i = 0; i < num_points; i += 1) {
@@ -144,8 +148,21 @@ static void profile_print_blocks(uint64_t cpu_duration) {
         double percent_with_children = (double)point->tsc_elapsed_inclusive * pct_denom;
         printf(", %.2f%% w/ children", percent_with_children);
       }
+      printf(")");
 
-      printf(")\n");
+      if (point->processed_byte_count) {
+        double mb = 1024.0 * 1024.0;
+        double gb = mb * 1024.0;
+
+        double seconds = (double)point->tsc_elapsed_inclusive / (double)cpu_freq;
+        double bytes_per_second = (double)point->processed_byte_count / seconds;
+        double mbs = (double)point->processed_byte_count / mb;
+        double gbs_per_second = bytes_per_second / gb;
+
+        printf("  %.3fmb @ %.2fgb/s", mbs, gbs_per_second);
+      }
+
+      printf("\n");
     }
   }
 }
@@ -153,8 +170,9 @@ static void profile_print_blocks(uint64_t cpu_duration) {
 
 #else
 
-#define PROFILE_BLOCK(NAME)
-#define PROFILE_FUNC()
+#define TIME_BLOCK(NAME)
+#define TIME_FUNC()
+#define TIME_BANDWIDTH(...)
 
 #define profile_print_blocks(...)
 
@@ -180,14 +198,10 @@ static void profile_end(void) {
   uint64_t cpu_duration = profiler.cpu_end - profiler.cpu_start;
 
   printf("--------------------------------------------------------------------------------\n");
-  printf("PROFILE RESULTS:\n");
-
   if (cpu_freq) {
     double total_time = (double)cpu_duration / (double)cpu_freq * 1000.0;
     printf("Total time: %fms (CPU %lld)\n", total_time, cpu_freq);
   }
-
-  profile_print_blocks(cpu_duration);
-
+  profile_print_blocks(cpu_duration, cpu_freq);
   printf("--------------------------------------------------------------------------------\n");
 }

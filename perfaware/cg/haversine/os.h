@@ -6,8 +6,6 @@
 
 static void os_init(void);
 
-static uint64_t os_page_size(void);
-
 static void *os_memory_reserve(uint64_t size);
 static void *os_memory_commit(void *data, uint64_t size);
 static void *os_memory_zero(void *data, uint64_t size);

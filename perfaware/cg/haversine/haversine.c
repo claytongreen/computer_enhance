@@ -28,6 +28,10 @@
 
 #define TRACE 0
 
+#ifndef PROFILE
+#define PROFILE 1
+#endif
+
 #include "os.h"
 #include "me_arena.h"
 
@@ -153,7 +157,7 @@ static int generate_data(int32_t seed, int32_t num_coord_pairs) {
 typedef struct string_t string_t;
 struct string_t {
   char *data;
-  int32_t length;
+  uint64_t length;
 };
 
 static string_t string_null = { 0, 0 };
@@ -181,37 +185,32 @@ static bool string_equals(string_t a, string_t b) {
 static string_t read_entire_file(char *filename) {
   string_t result = { 0 };
 
-  PROFILE_FUNC()
+  TIME_FUNC()
   {
-    if (filename != 0) {
-        FILE *file = fopen(filename, "rb");
-        if (!file) {
-            fprintf(stderr, "Failed to open file: '%s'\n", filename);
-        } else {
-            fseek(file, 0, SEEK_END);
-            long length = ftell(file);
+    FILE *file = fopen(filename, "rb");
+    if (file) {
+      struct __stat64 stat;
+      _stat64(filename, &stat);
 
-            result.data = (char *)malloc(length);
-            if (!result.data) {
-                fclose(file);
-                fprintf(stderr, "Failed to allocate data for file: %ld\n", length);
-            } else {
-                fseek(file, 0, SEEK_SET);
+      result.length = (uint64_t)stat.st_size;
+      result.data = (char *)malloc(result.length);
+      if (result.data) {
+          size_t bytes_read = 0;
+          TIME_BANDWIDTH("fread", result.length) {
+            bytes_read = fread(result.data, result.length, 1, file);
+          }
+          if (bytes_read != 1) {
+              fprintf(stderr, "Failed to read entire file:  %zd != %lld\n", bytes_read, result.length);
 
-                size_t bytes_read = fread(result.data, 1, length, file);
-                if (bytes_read != length) {
-                    fclose(file);
-                    fprintf(stderr, "Failed to read entire file:  %zd != %ld\n", bytes_read, length);
+              free(result.data);
+              result.data = 0;
+              result.length = 0;
+          }
 
-                    free(result.data);
-                    result.data = 0;
-                } else {
-                    result.length = length;
-                }
-
-                fclose(file);
-            }
-        }
+          fclose(file);
+      }
+    } else {
+        fprintf(stderr, "Failed to open file: '%s'\n", filename);
     }
   }
 
@@ -373,7 +372,7 @@ static void token_print(token_t *token) {
   case TOKEN_KIND_NULL: printf("null"); break;
   case TOKEN_KIND_TRUE: printf("true"); break;
   case TOKEN_KIND_FALSE: printf("false"); break;
-  case TOKEN_KIND_STRING: printf("%.*s", token->string.length, token->string.data); break;
+  case TOKEN_KIND_STRING: printf("%.*s", (int)token->string.length, token->string.data); break;
   case TOKEN_KIND_LONG: printf("%ld", token->number_long); break;
   case TOKEN_KIND_DOUBLE: printf("%f", token->number_double); break;
   case TOKEN_KIND_EOF: printf("EOF"); break;
@@ -676,7 +675,7 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
 }
 
 static void json_decode(json_t *json) {
-  PROFILE_FUNC()
+  TIME_FUNC()
   {
     if (json->root->kind == JSON_TYPE_KIND_NULL) {
       tokenizer_t tokenizer = { json->source };
@@ -713,7 +712,7 @@ static void json_print_object(json_object_t *it, uint32_t *depth) {
   printf("{\n");
   json_object_property_t *prop = it->properties;
   for (int32_t i = 0; i < it->num_properties; i += 1) {
-    printf("%.*s: ", prop->name.length, prop->name.data);
+    printf("%.*s: ", (int)prop->name.length, prop->name.data);
     json_print_type(prop->value, depth);
     printf("\n");
     prop = prop->next;
@@ -727,7 +726,7 @@ static void json_print_type(json_type_t *it, uint32_t *depth) {
   case JSON_TYPE_KIND_NULL:   printf("null"); break;
   case JSON_TYPE_KIND_NUMBER: printf("%f", it->number); break;
   case JSON_TYPE_KIND_BOOL:   printf("%s", it->b ? "true" : "false"); break;
-  case JSON_TYPE_KIND_STRING: printf("%.*s", it->string.length, it->string.data); break;
+  case JSON_TYPE_KIND_STRING: printf("%.*s", (int)it->string.length, it->string.data); break;
 
   case JSON_TYPE_KIND_OBJECT:
     *depth += 1;
@@ -771,25 +770,25 @@ struct Calc_Haversum_Result {
   int64_t num_coords;
 };
 
-static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t answers) {
+static Calc_Haversum_Result calc_haversum(json_t *json, string_t answers) {
   Calc_Haversum_Result result = { 0, 0 };
 
-  PROFILE_FUNC()
-  {
-    if (root->kind != JSON_TYPE_KIND_NULL) {
-      json_type_t *coords = json_find_property(root, STR("coords"));
-      if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
-        {
-          double avg = 0;
+  json_type_t *root = json->root;
+  if (root->kind != JSON_TYPE_KIND_NULL) {
+    json_type_t *coords = json_find_property(root, STR("coords"));
+    if (coords && coords->kind == JSON_TYPE_KIND_ARRAY) {
+      {
+        double avg = 0;
 
-          json_array_t *arr = coords->array;
+        json_array_t *arr = coords->array;
 
-          result.num_coords = arr->num_values;
+        result.num_coords = arr->num_values;
 
-          double *answer = (double *)answers.data;
+        double *answer = (double *)answers.data;
 
+        uint64_t byte_count = result.num_coords * sizeof(double) * 4;
+        TIME_BANDWIDTH(__func__, byte_count) {
           json_array_value_t *value = arr->values;
-          PROFILE_BLOCK("calc_haversum_loop")
           while (value) {
             json_type_t *x0 = json_find_property(value->value, STR("x0"));
             json_type_t *y0 = json_find_property(value->value, STR("y0"));
@@ -821,27 +820,27 @@ static Calc_Haversum_Result calc_haversum(json_type_t *root, string_t answers) {
               break;
             }
           }
-
-          result.haversum = avg / (double) arr->num_values;
-
-          if (answer && *answer != result.haversum) {
-            fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
-          }
         }
-      } else {
-        fprintf(stderr, "Failed to find \"coords\" array\n");
+
+        result.haversum = avg / (double) arr->num_values;
+
+        if (answer && *answer != result.haversum) {
+          fprintf(stderr, "Expected avg %f, got %f\n", *answer, avg);
+        }
       }
     } else {
-      // TODO: record error in json
-      fprintf(stderr, "Failed to parse json\n");
+      fprintf(stderr, "Failed to find \"coords\" array\n");
     }
+  } else {
+    // TODO: record error in json
+    fprintf(stderr, "Failed to parse json\n");
   }
 
   return result;
 }
 
 static void json_free(json_t *json) {
-  PROFILE_FUNC() {
+  TIME_FUNC() {
     me_arena_destroy(json->arena);
     json = NULL;
   }
@@ -867,7 +866,7 @@ static int decode_data(char *filename, char *answers_filename) {
     json_decode(json);
     // TODO: check json error?
 
-    Calc_Haversum_Result haversum = calc_haversum(json->root, answers);
+    Calc_Haversum_Result haversum = calc_haversum(json, answers);
     printf("\n");
     printf("Read %lld coordinate pairs\n", haversum.num_coords);
     printf("Averge haversum: %f\n", haversum.haversum);

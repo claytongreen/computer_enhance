@@ -8,13 +8,9 @@
 #pragma warning(default:4042)
 
 static SYSTEM_INFO info;
+
 static void os_init(void) {
   GetSystemInfo(&info);
-
-#if 0
-  printf("[OS]: page size: %ld\n", info.dwPageSize);
-  printf("[OS]: allocation granulatiry: %ld\n", info.dwAllocationGranularity);
-#endif
 }
 
 static uint64_t os_page_size(void) {
@@ -23,27 +19,6 @@ static uint64_t os_page_size(void) {
 
 static void *os_memory_reserve(uint64_t size) {
   void *result = VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_NOACCESS);
-#if 0 && _DEBUG
-  if (result == NULL) {
-    DWORD error = GetLastError();
-    
-    LPVOID message;
-    FormatMessageA(
-      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-      NULL,
-      error,
-      MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-      (LPSTR) &message,
-      0,
-      NULL
-    );
-
-    MessageBox(NULL, (LPCSTR)message, TEXT("ERROR"), MB_OK);
-
-    LocalFree(message);
-    ExitProcess(error);
-  }
-#endif
   return result;
 }
 

@@ -14,7 +14,7 @@ static uint64_t align_down(uint64_t x) {
 Arena *me_arena_create(void) {
   Arena *result = 0;
 
-  uint64_t capacity = GB((uint64_t)4);
+  uint64_t capacity = GB((uint64_t)64);
 
   uint8_t *base = (uint8_t *)os_memory_reserve(capacity);
   if (base) {
@@ -44,7 +44,7 @@ void *me_arena_push(Arena *arena, uint64_t size) {
   ASSERT(at < arena->capacity);
 
   if (at > arena->commit) {
-    uint64_t page_size = os_page_size();
+    uint64_t page_size = os_page_size() * 10;
     void *data = os_memory_commit(arena->base + arena->commit, page_size);
     if (data) {
       result = arena->base + arena->offset;
