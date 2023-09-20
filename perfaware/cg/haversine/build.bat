@@ -14,14 +14,18 @@ where /Q cl.exe || (
 IF NOT EXIST build mkdir build
 pushd build
 
+set FLAGS=/nologo /std:c11 /arch:AVX2 /Zi /W4
+
 rem call cl /nologo /Zi /O2 /FC ..\disasm\main.cpp /Fedisasm.exe
 rem call cl /nologo /Zi /FC ..\disasm\main.cpp /Fedisasm.exe
 rem call cl /nologo /Zi /FC ..\disasm\main-gui.cpp /Fedisasm-gui.exe /link C:\dev\raylib-4.5.0_win64_msvc16\lib\raylibdll.lib
 
-call cl /nologo /std:c11 /arch:AVX2 /Zi /W4     ..\haversine.c /Fehaversine-debug.exe         /D_DEBUG
-call cl /nologo /std:c11 /arch:AVX2 /Zi /W4     ..\haversine.c /Fehaversine-debug-profile.exe /D_DEBUG /DPROFILE=1
-call cl /nologo /std:c11 /arch:AVX2 /Zi /W4 /O2 ..\haversine.c /Fehaversine-release.exe
-call cl /nologo /std:c11 /arch:AVX2 /Zi /W4 /O2 ..\haversine.c /Fehaversine-release-profile.exe        /DPROFILE=1
+rem call cl /nologo /std:c11 /arch:AVX2 /Zi /W4     ..\haversine.c /Fehaversine-debug.exe         /D_DEBUG
+rem call cl %FLAGS%     ..\haversine.c /Fehaversine-debug-profile.exe /D_DEBUG /DPROFILE=1
+rem call cl %FLAGS% /O2 ..\haversine.c /Fehaversine-release.exe
+rem call cl %FLAGS% /O2 ..\haversine.c /Fehaversine-release-profile.exe        /DPROFILE=1
+
+call cl %FLAGS% /O2 ..\repitition.c
 
 popd
 

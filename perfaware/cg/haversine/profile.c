@@ -4,27 +4,32 @@ static uint64_t cpu_timer_read(void) {
   return __rdtsc();
 }
 
-static uint64_t estimate_cpu_timer_freq() {
-  uint64_t milliseconds_to_wait = 100;
-  uint64_t os_freq = os_timer_frequency();
+static uint64_t estimate_cpu_timer_freq(void) {
+  uint64_t os_freq = os_timer_frequency(); // perf-counts / second
 
-  uint64_t cpu_start = cpu_timer_read();
+  // perf-counts / second * (second) -> perf-counts
+  enum { MS_TO_WAIT = 100 };
+  uint64_t os_wait_time = os_freq * MS_TO_WAIT / 1000;
 
-  uint64_t os_start = os_timer_read();
-  uint64_t os_end = 0;
-  uint64_t os_elapsed = 0;
-  uint64_t os_wait_time = os_freq * milliseconds_to_wait / 1000;
+  uint64_t cpu_start = cpu_timer_read(); // clocks
+
+  uint64_t os_start = os_timer_read(); // perf-counts
+  uint64_t os_end = 0; // perf-counts
+  uint64_t os_elapsed = 0; // perf-counts
 
   while (os_elapsed < os_wait_time) {
     os_end = os_timer_read();
     os_elapsed = os_end - os_start;
   }
 
-  uint64_t cpu_end = cpu_timer_read();
-  uint64_t cpu_elapsed = cpu_end - cpu_start;
+  uint64_t cpu_end = cpu_timer_read(); // clocks
+  uint64_t cpu_elapsed = cpu_end - cpu_start; // clocks
 
-  uint64_t cpu_freq = 0;
+  uint64_t cpu_freq = 0; // clocks / second
   if (os_elapsed) {
+    //  perf_counts     clocks         1           clocks
+    //  -----------  x  ------  x  -----------  =  ------
+    //   second           1        perf-counts     second
     cpu_freq = os_freq * cpu_elapsed / os_elapsed;
   }
 

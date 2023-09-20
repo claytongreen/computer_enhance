@@ -675,7 +675,7 @@ static json_type_t *json_begin_array(json_t *json, tokenizer_t *tokenizer) {
 }
 
 static void json_decode(json_t *json) {
-  TIME_FUNC()
+  TIME_BANDWIDTH(__func__, json->source.length)
   {
     if (json->root->kind == JSON_TYPE_KIND_NULL) {
       tokenizer_t tokenizer = { json->source };
