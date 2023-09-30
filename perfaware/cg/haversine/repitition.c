@@ -1,12 +1,13 @@
-
 #define _CRT_SECURE_NO_WARNINGS
-
-#include <windows.h>
 
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
 #include <sys/stat.h>
+
+#include <intrin.h>
+#include <windows.h>
+#include <psapi.h>
 
 #ifdef _DEBUG
 #define ASSERT(Cond) do { if(!(Cond)) __debugbreak(); } while (0)
@@ -46,27 +47,50 @@ enum TesterState {
   TesterState_Finished,
 };
 
+static char *tester_state_string(enum TesterState state) {
+  char *result;
+  switch (state) {
+  case TesterState_None: result = "None"; break;
+  case TesterState_Testing: result = "Testing"; break;
+  case TesterState_Error: result = "Error"; break;
+  case TesterState_Finished: result = "Finished"; break;
+  default: result = "UNKNOWN"; break;
+  }
+
+  return result;
+}
+
+enum TestValue {
+  TestValue_test_count,
+  TestValue_tsc,
+  TestValue_byte_count,
+  TestValue_mem_page_fault_count,
+
+  TestValue_COUNT,
+};
+
+struct TestValues {
+  uint64_t value[TestValue_COUNT];
+};
+
+struct TesterResults {
+  struct TestValues total;
+  struct TestValues min;
+  struct TestValues max;
+};
+
 struct Tester {
-  enum TesterState state;
-
   uint64_t cpu_freq;
-  uint64_t tsc_wait;
   uint64_t bytes_expected;
+  uint64_t tsc_wait;
+  uint64_t tsc_start;
 
-  uint64_t test_count;
-
-  uint64_t bytes_consumed;
-  uint64_t tsc_elapsed;
+  enum TesterState state;
   uint32_t begin_time_count;
   uint32_t end_time_count;
 
-  uint64_t tsc_start;
-
-  uint64_t min;
-  uint64_t min_test;
-  uint64_t max;
-  uint64_t max_test;
-  uint64_t tsc_elapsed_total;
+  struct TestValues test;
+  struct TesterResults results;
 };
 
 static void tester_error(struct Tester *tester, char *error) {
@@ -80,12 +104,12 @@ static void tester_new_wave(struct Tester *tester, uint64_t cpu_freq, uint64_t t
 
     tester->cpu_freq = cpu_freq;
 
-    enum { SECONDS_TO_WAIT = 10 };
+    enum { SECONDS_TO_WAIT = 3 };
     tester->tsc_wait = cpu_freq * SECONDS_TO_WAIT;
 
     tester->bytes_expected = target_bytes;
 
-    tester->min = (uint64_t)-1;
+    tester->results.min.value[TestValue_tsc] = (uint64_t)-1;
   } else if (tester->state == TesterState_Finished) {
     tester->state = TesterState_Testing;
 
@@ -95,87 +119,107 @@ static void tester_new_wave(struct Tester *tester, uint64_t cpu_freq, uint64_t t
     if (tester->bytes_expected != target_bytes) {
       tester_error(tester, "Bytes expected changed");
     }
-
-    // tester->test_count = 0;
-
-    // tester->min = ULLONG_MAX;
-    // tester->min_test = 0;
-    // tester->max = 0;
-    // tester->max_test = 0;
   }
 
   tester->tsc_start = cpu_timer_read();
 }
 
-static void print_clocks_ms_gbps(char *s, double clocks, double bytes_consumed, double cpu_freq) {
-  printf("| %s: %10.0f", s, clocks);
+static int test_values_print(char *label, struct TestValues values, uint64_t cpu_freq) {
+  int result = 0;
 
-  if (clocks && cpu_freq) {
-    double seconds = clocks / cpu_freq;
+  uint64_t test_count = values.value[TestValue_test_count];
+  double divisor = test_count ? (double)test_count : 1;
+
+  double tsc = (double)values.value[TestValue_tsc] / divisor;
+  double byte_count = (double)values.value[TestValue_byte_count] / divisor;
+  double mem_page_fault_count = (double)values.value[TestValue_mem_page_fault_count] / divisor;
+
+  result += printf("| %s: %10.0f", label, tsc);
+
+  if (cpu_freq) {
+    double seconds = tsc / (double)cpu_freq;
     double ms = seconds * 1000.0;
-    double bps = bytes_consumed / seconds;
-    double gbps = bps / (1024.0 * 1024.0 * 1024.0);
-    printf("  %3.7f ms  (%02.7f GB/s)", ms, gbps);
+    result += printf(" %3.7fms", ms);
+
+    if (byte_count > 0) {
+      double gb = 1024.0 * 1024.0 * 1024.0;
+      double gbps = byte_count / (gb * seconds);
+      result += printf(" %3.7fGB/s", gbps);
+    }
   }
+
+  if (mem_page_fault_count > 0) {
+    double kbpf = byte_count / (mem_page_fault_count * 1024.0);
+    result += printf(" PF: %0.4f (%0.4f kb/fault)", mem_page_fault_count, kbpf);
+  }
+
+  return result;
 }
 
 static uint32_t tester_is_testing(struct Tester *tester) {
+  static int width = 0;
+
   if (tester->state == TesterState_Testing) {
+    struct TestValues test = tester->test;
     uint64_t now = cpu_timer_read();
 
     if (tester->begin_time_count) {
       if (tester->begin_time_count != tester->end_time_count) {
         tester_error(tester, "Unbalanced tester_begin_time/tester_end_time");
       }
-      if (tester->bytes_consumed != tester->bytes_expected) {
+      if (test.value[TestValue_byte_count] != tester->bytes_expected) {
         tester_error(tester, "Consumed bytes mismatch");
       }
 
       if (tester->state == TesterState_Testing) {
-        uint64_t time = tester->tsc_elapsed;
+        struct TesterResults *results = &tester->results;
 
-        tester->test_count += 1;
-        tester->tsc_elapsed_total += time;
+        if (results->total.value[TestValue_test_count] == 0) {
+          width = 0;
+        }
 
-        if (time < tester->min) {
-          tester->min = time;
-          tester->min_test = tester->test_count;
+        results->total.value[TestValue_test_count] += 1;
+        results->total.value[TestValue_tsc] += test.value[TestValue_tsc];
+        results->total.value[TestValue_byte_count] += test.value[TestValue_byte_count];
+        results->total.value[TestValue_mem_page_fault_count] += test.value[TestValue_mem_page_fault_count];
+
+        if (test.value[TestValue_tsc] < results->min.value[TestValue_tsc]) {
+          results->min = test;
+
           tester->tsc_start = now;
 
-          print_clocks_ms_gbps("min", (double)tester->min, (double)tester->bytes_consumed, (double)tester->cpu_freq);
-          printf("             \r");
+          if (width) {
+            printf("%*s\r", width, "");
+          }
+
+          width = test_values_print("min", results->min, tester->cpu_freq);
         }
-        if (time > tester->max) {
-          tester->max = time;
-          tester->max_test = tester->test_count;
+        if (test.value[TestValue_tsc] > results->max.value[TestValue_tsc]) {
+          results->max = test;
         }
 
-        tester->bytes_consumed = 0;
-        tester->tsc_elapsed = 0;
         tester->begin_time_count = 0;
         tester->end_time_count = 0;
+
+        // reset accumulator for the next test wave
+        tester->test = (struct TestValues){ 0 };
       }
     }
 
     uint64_t tsc_since_change = now - tester->tsc_start;
     if (tsc_since_change > tester->tsc_wait) {
-      printf("                                                                                \r");
+      tester->state = TesterState_Finished;
 
-      print_clocks_ms_gbps("min", (double)tester->min, (double)tester->bytes_expected, (double)tester->cpu_freq);
-      printf(" on TEST %lld", tester->min_test);
-      printf("\n");
-
-      print_clocks_ms_gbps("max", (double)tester->max, (double)tester->bytes_expected, (double)tester->cpu_freq);
-      printf(" on TEST %lld", tester->max_test);
-      printf("\n");
-
-      if (tester->test_count != 0) {
-        print_clocks_ms_gbps("avg", (double)tester->tsc_elapsed_total / (double)tester->test_count, (double)tester->bytes_expected, (double)tester->cpu_freq);
-        printf(" over %lld tests", tester->test_count);
-        printf("\n");
+      if (width) {
+        printf("%*s\r", width, "");
       }
 
-      tester->state = TesterState_Finished;
+      test_values_print("min", tester->results.min, tester->cpu_freq);
+      printf("\n");
+      test_values_print("max", tester->results.max, tester->cpu_freq);
+      printf("\n");
+      test_values_print("avg", tester->results.total, tester->cpu_freq);
+      printf("\n");
     }
   }
 
@@ -185,16 +229,23 @@ static uint32_t tester_is_testing(struct Tester *tester) {
 
 static void tester_begin_time(struct Tester *tester) {
   tester->begin_time_count += 1;
-  tester->tsc_elapsed -= cpu_timer_read();
+
+  struct TestValues *test = &tester->test;
+  test->value[TestValue_mem_page_fault_count] -= os_page_fault_count();
+  test->value[TestValue_tsc]                  -= cpu_timer_read();
 }
 
 static void tester_end_time(struct Tester *tester) {
-  tester->tsc_elapsed += cpu_timer_read();
+  struct TestValues *test = &tester->test;
+  test->value[TestValue_tsc]                  += cpu_timer_read();
+  test->value[TestValue_mem_page_fault_count] += os_page_fault_count();
+
   tester->end_time_count += 1;
 }
 
 static void tester_consume_bytes(struct Tester *tester, uint64_t bytes) {
-  tester->bytes_consumed += bytes;
+  struct TestValues *test = &tester->test;
+  test->value[TestValue_byte_count] += bytes;
 }
 
 struct TesterParams {
@@ -302,6 +353,26 @@ static void test_win32_readfile(struct Tester *tester, struct TesterParams param
   }
 }
 
+static void test_write_to_all_bytes(struct Tester *tester, struct TesterParams params) {
+  while (tester_is_testing(tester)) {
+    uint8_t *buffer = tester_params_allocate_buffer(params);
+    if (!buffer) {
+      tester_error(tester, "WriteToAllBytes: failed to allocate buffer");
+      break;
+    }
+
+    tester_begin_time(tester);
+    for (size_t i = 0; i < params.buffer_length; i += 1) {
+      buffer[i] = (uint8_t)i;
+    }
+    tester_end_time(tester);
+
+    tester_consume_bytes(tester, params.buffer_length);
+
+    tester_params_release_buffer(params, buffer);
+  }
+}
+
 
 struct Test {
   char *name;
@@ -310,8 +381,9 @@ struct Test {
   struct Tester tester;
 };
 static struct Test tests[] = {
-  { "fread", test_fread },
-  { "ReadFile", test_win32_readfile },
+  { "WriteToAllBytes", test_write_to_all_bytes },
+  // { "fread", test_fread },
+  // { "ReadFile", test_win32_readfile },
 };
 static struct Tester testers[ARRAY_COUNT(tests)][AllocationType_COUNT];
 
@@ -322,7 +394,7 @@ int main(int argc, char **argv) {
   printf("Testing...\n");
 
   // TODO: get from args
-  char *filename = "build\\data_1000000.json";
+  char *filename = "build\\data_10000000.json";
 
   struct __stat64 stat;
   _stat64(filename, &stat);
@@ -334,6 +406,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  os_init();
 
   uint64_t cpu_freq = estimate_cpu_timer_freq();
 

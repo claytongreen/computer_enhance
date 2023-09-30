@@ -32,6 +32,8 @@
 #define PROFILE 1
 #endif
 
+#include <Windows.h>
+
 #include "os.h"
 #include "me_arena.h"
 
