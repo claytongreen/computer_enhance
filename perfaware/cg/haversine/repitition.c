@@ -6,8 +6,6 @@
 #include <sys/stat.h>
 
 #include <intrin.h>
-#include <windows.h>
-#include <psapi.h>
 
 #ifdef _DEBUG
 #define ASSERT(Cond) do { if(!(Cond)) __debugbreak(); } while (0)
@@ -26,6 +24,7 @@
 enum AllocationType {
   AllocationType_None,
   AllocationType_malloc,
+  AllocationType_VirtualAlloc,
 
   AllocationType_COUNT,
 };
@@ -35,6 +34,7 @@ static char *allocation_type_string(enum AllocationType allocation_type) {
   switch (allocation_type) {
     case AllocationType_None: result = ""; break;
     case AllocationType_malloc: result = "malloc"; break;
+    case AllocationType_VirtualAlloc: result = "VirtualAlloc"; break;
     default: result = "UNKNOWN"; break;
   }
   return result;
@@ -267,6 +267,10 @@ static uint8_t *tester_params_allocate_buffer(struct TesterParams params) {
       result = (uint8_t *)malloc(params.buffer_length);
       break;
 
+    case AllocationType_VirtualAlloc:
+      result = (uint8_t *)VirtualAlloc(0, params.buffer_length, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+      break;
+
     default:
       fprintf(stderr, "ERROR: unrecognized allocation type");
       break;
@@ -281,6 +285,12 @@ static void tester_params_release_buffer(struct TesterParams params, uint8_t *bu
 
     case AllocationType_malloc:
       free(buffer);
+      buffer = 0;
+      break;
+
+    case AllocationType_VirtualAlloc:
+      VirtualFree(buffer, 0, MEM_RELEASE);
+      buffer = 0;
       break;
 
     default:
@@ -373,6 +383,26 @@ static void test_write_to_all_bytes(struct Tester *tester, struct TesterParams p
   }
 }
 
+static void test_write_to_all_bytes_backwards(struct Tester *tester, struct TesterParams params) {
+  while (tester_is_testing(tester)) {
+    uint8_t *buffer = tester_params_allocate_buffer(params);
+    if (!buffer) {
+      tester_error(tester, "WriteToAllBytes: failed to allocate buffer");
+      break;
+    }
+
+    tester_begin_time(tester);
+    for (size_t i = 0; i < params.buffer_length; i += 1) {
+      buffer[(params.buffer_length - 1) - i] = (uint8_t)i;
+    }
+    tester_end_time(tester);
+
+    tester_consume_bytes(tester, params.buffer_length);
+
+    tester_params_release_buffer(params, buffer);
+  }
+}
+
 
 struct Test {
   char *name;
@@ -381,7 +411,8 @@ struct Test {
   struct Tester tester;
 };
 static struct Test tests[] = {
-  { "WriteToAllBytes", test_write_to_all_bytes },
+  { "Write All Bytes", test_write_to_all_bytes },
+  { "Write All Bytes Backwards", test_write_to_all_bytes_backwards },
   // { "fread", test_fread },
   // { "ReadFile", test_win32_readfile },
 };

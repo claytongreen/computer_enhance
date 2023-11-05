@@ -1,3 +1,4 @@
+#include <windows.h>
 #include <psapi.h>
 
 struct OsMetrics {

@@ -29,5 +29,7 @@ rem call cl %CFLAGS% /O2 ..\haversine.c /Fehaversine-release-profile.exe        
 rem call cl %CFLAGS%     ..\repitition.c /Ferep-debug.exe /Fmrep-debug.map
 call cl %CFLAGS% /O2 ..\repitition.c /Ferep.exe /Fmrep.map
 
+call cl %CFLAGS% /O2 ..\probe.c /Feprobe.exe /Fmprobe.map
+
 popd
 
