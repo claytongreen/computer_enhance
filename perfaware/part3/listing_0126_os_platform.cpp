@@ -11,8 +11,10 @@
    ======================================================================== */
 
 /* ========================================================================
-   LISTING 108
+   LISTING 126
    ======================================================================== */
+
+static u64 EstimateCPUTimerFreq(void);
 
 #if _WIN32
 
@@ -20,12 +22,16 @@
 #include <windows.h>
 #include <psapi.h>
 
-struct os_metrics
+#pragma comment (lib, "advapi32.lib")
+
+struct os_platform
 {
     b32 Initialized;
+    u64 LargePageSize; // NOTE(casey): This will be 0 when large pages are not supported (which is most of the time!)
     HANDLE ProcessHandle;
+    u64 CPUTimerFreq;
 };
-static os_metrics GlobalMetrics;
+static os_platform GlobalOSPlatform;
 
 static u64 GetOSTimerFreq(void)
 {
@@ -45,18 +51,45 @@ static u64 ReadOSPageFaultCount(void)
 {
     PROCESS_MEMORY_COUNTERS_EX MemoryCounters = {};
     MemoryCounters.cb = sizeof(MemoryCounters);
-    GetProcessMemoryInfo(GlobalMetrics.ProcessHandle, (PROCESS_MEMORY_COUNTERS *)&MemoryCounters, sizeof(MemoryCounters));
+    GetProcessMemoryInfo(GlobalOSPlatform.ProcessHandle, (PROCESS_MEMORY_COUNTERS *)&MemoryCounters, sizeof(MemoryCounters));
     
     u64 Result = MemoryCounters.PageFaultCount;
     return Result;
 }
 
-static void InitializeOSMetrics(void)
+static u64 TryToEnableLargePages(void)
 {
-    if(!GlobalMetrics.Initialized)
+    u64 Result = 0;
+    
+    HANDLE TokenHandle;
+    if(OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &TokenHandle))
     {
-        GlobalMetrics.Initialized = true;
-        GlobalMetrics.ProcessHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, GetCurrentProcessId());
+        TOKEN_PRIVILEGES Privs = {};
+        Privs.PrivilegeCount = 1;
+        Privs.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        if(LookupPrivilegeValue(0, SE_LOCK_MEMORY_NAME, &Privs.Privileges[0].Luid))
+        {
+            AdjustTokenPrivileges(TokenHandle, FALSE, &Privs, 0, 0, 0);
+            if(GetLastError() == ERROR_SUCCESS)
+            {
+                Result = GetLargePageMinimum();
+            }
+        }
+        
+        CloseHandle(TokenHandle);
+    }
+    
+    return Result;
+}
+
+static void InitializeOSPlatform(void)
+{
+    if(!GlobalOSPlatform.Initialized)
+    {
+        GlobalOSPlatform.Initialized = true;
+        GlobalOSPlatform.LargePageSize = TryToEnableLargePages();
+        GlobalOSPlatform.ProcessHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, GetCurrentProcessId());
+        GlobalOSPlatform.CPUTimerFreq = EstimateCPUTimerFreq();
     }
 }
 
@@ -64,6 +97,13 @@ static void InitializeOSMetrics(void)
 
 #include <x86intrin.h>
 #include <sys/time.h>
+
+struct os_platform
+{
+    b32 Initialized;
+    u64 CPUTimerFreq;
+};
+static os_platform GlobalOSPlatform;
 
 static u64 GetOSTimerFreq(void)
 {
@@ -97,13 +137,18 @@ static u64 ReadOSPageFaultCount(void)
     return Result;
 }
 
-static void InitializeOSMetrics(void)
+static void InitializeOSPlatform(void)
 {
+    if(!GlobalOSPlatform.Initialized)
+    {
+        GlobalOSPlatform.Initialized = true;
+        GlobalOSPlatform.CPUTimerFreq = EstimateCPUTimerFreq();
+    }
 }
 
 #endif
 
-/* NOTE(casey): This does not need to be "inline", it could just be "static"
+/* NOTE(casey): These do not need to be "inline", it could just be "static"
    because compilers will inline it anyway. But compilers will warn about
    static functions that aren't used. So "inline" is just the simplest way
    to tell them to stop complaining about that. */
@@ -114,6 +159,18 @@ inline u64 ReadCPUTimer(void)
 	// on which ones are available on your platform.
 	
 	return __rdtsc();
+}
+
+inline u64 GetCPUTimerFreq(void)
+{
+    u64 Result = GlobalOSPlatform.CPUTimerFreq;
+    return Result;
+}
+
+inline u64 GetLargePageSize(void)
+{
+    u64 Result = GlobalOSPlatform.LargePageSize;
+    return Result;
 }
 
 static u64 EstimateCPUTimerFreq(void)
