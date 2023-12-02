@@ -27,9 +27,14 @@ rem call cl %CFLAGS% /O2 ..\haversine.c /Fehaversine-release.exe
 rem call cl %CFLAGS% /O2 ..\haversine.c /Fehaversine-release-profile.exe                                       /DPROFILE=1
 
 rem call cl %CFLAGS%     ..\repitition.c /Ferep-debug.exe /Fmrep-debug.map
-call cl %CFLAGS% /O2 ..\repitition.c /Ferep.exe /Fmrep.map
+rem call cl %CFLAGS% /O2 ..\repitition.c /Ferep.exe /Fmrep.map
 
-call cl %CFLAGS% /O2 ..\probe.c /Feprobe.exe /Fmprobe.map
+
+call nasm -f win64 -o nop.obj ..\nop.asm
+call lib /nologo nop.obj
+call cl %CFLAGS% ..\repasm.c /Ferepasm.exe /Fmrepasm.map /link nop.lib
+
+rem call cl %CFLAGS% /O2 ..\probe.c /Feprobe.exe /Fmprobe.map
 
 popd
 
