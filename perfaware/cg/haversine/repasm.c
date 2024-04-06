@@ -18,9 +18,7 @@
 #include "os.h"
 
 #include "os.c"
-
 #include "profile.c"
-
 #include "tester.c"
 
 static void test(uint8_t *buffer, uint64_t buffer_length) {

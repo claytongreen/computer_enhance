@@ -18,7 +18,6 @@
 #include "os.h"
 
 #include "os.c"
-
 #include "profile.c"
 
 enum AllocationType {
@@ -460,3 +459,4 @@ int main(int argc, char **argv) {
     }
   }
 }
+

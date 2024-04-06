@@ -14,7 +14,7 @@ where /Q cl.exe || (
 IF NOT EXIST build mkdir build
 pushd build
 
-set FLAGS=/nologo /arch:AVX2 /Zi /W4
+set FLAGS=/nologo /arch:AVX512 /Zi /W4
 set CFLAGS=%FLAGS% /std:c11
 
 rem call cl %FLAGS% /O2 ..\disasm\main.cpp /Fedisasm.exe
@@ -29,12 +29,28 @@ rem call cl %CFLAGS% /O2 ..\haversine.c /Fehaversine-release-profile.exe        
 rem call cl %CFLAGS%     ..\repitition.c /Ferep-debug.exe /Fmrep-debug.map
 rem call cl %CFLAGS% /O2 ..\repitition.c /Ferep.exe /Fmrep.map
 
-
-call nasm -f win64 -o nop.obj ..\nop.asm
-call lib /nologo nop.obj
-call cl %CFLAGS% ..\repasm.c /Ferepasm.exe /Fmrepasm.map /link nop.lib
+rem call nasm -f win64 -o nop.obj ..\nop.asm
+rem call lib /nologo nop.obj
+rem call cl %CFLAGS% ..\repasm.c /Ferepasm.exe /Fmrepasm.map /link nop.lib
 
 rem call cl %CFLAGS% /O2 ..\probe.c /Feprobe.exe /Fmprobe.map
+
+rem call nasm -f win64 -o read.obj ..\read.asm
+rem call lib /nologo read.obj
+rem call cl %CFLAGS% ..\readasm.c /Fereadasm.exe /Fmreadasm.map /link read.lib
+
+rem call nasm -f win64 -o write.obj ..\write.asm
+rem call lib /nologo write.obj
+rem call cl %CFLAGS% ..\writeasm.c /Fewriteasm.exe /Fmwriteasm.map /link write.lib
+
+rem call nasm -f win64 -o mov.obj ..\mov.asm
+rem call lib /nologo mov.obj
+rem call cl %CFLAGS% ..\movasm.c /Femovasm.exe /Fmmovasm.map /link mov.lib
+
+call nasm -f win64 -o cache.obj ..\cache.asm
+call lib /nologo cache.obj
+call cl %CFLAGS% ..\cache.c /Fecache.exe /Fmcache.map /link cache.lib
+
 
 popd
 
