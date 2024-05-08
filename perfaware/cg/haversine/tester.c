@@ -6,19 +6,6 @@ enum TesterState {
   TesterState_Finished,
 };
 
-static char *tester_state_string(enum TesterState state) {
-  char *result;
-  switch (state) {
-  case TesterState_None: result = "None"; break;
-  case TesterState_Testing: result = "Testing"; break;
-  case TesterState_Error: result = "Error"; break;
-  case TesterState_Finished: result = "Finished"; break;
-  default: result = "UNKNOWN"; break;
-  }
-
-  return result;
-}
-
 enum TestValue {
   TestValue_test_count,
   TestValue_tsc,
@@ -63,10 +50,7 @@ static void tester_new_wave(struct Tester *tester, uint64_t cpu_freq, uint64_t t
     tester->state = TesterState_Testing;
 
     tester->cpu_freq = cpu_freq;
-
-    enum { SECONDS_TO_WAIT = 3 };
-    tester->tsc_wait = cpu_freq * SECONDS_TO_WAIT;
-
+    tester->tsc_wait = cpu_freq * 3; // 3 second timeout
     tester->bytes_expected = target_bytes;
 
     tester->results.min.value[TestValue_tsc] = (uint64_t)-1;
@@ -83,11 +67,10 @@ static void tester_new_wave(struct Tester *tester, uint64_t cpu_freq, uint64_t t
 
   tester->iteration = 0;
   tester->tsc_start = cpu_timer_read();
+  tester->test.value[TestValue_test_count] = 1;
 }
 
-static int test_values_print(char *label, struct TestValues values, uint64_t cpu_freq) {
-  int result = 0;
-
+static void test_values_print(char *label, struct TestValues values, uint64_t cpu_freq) {
   uint64_t test_count = values.value[TestValue_test_count];
   double divisor = test_count ? (double)test_count : 1;
 
@@ -95,31 +78,27 @@ static int test_values_print(char *label, struct TestValues values, uint64_t cpu
   double byte_count = (double)values.value[TestValue_byte_count] / divisor;
   double mem_page_fault_count = (double)values.value[TestValue_mem_page_fault_count] / divisor;
 
-  result += printf("| %s: %10.0f", label, tsc);
+  printf("| %s: %10.0f", label, tsc);
 
   if (cpu_freq) {
     double seconds = tsc / (double)cpu_freq;
     double ms = seconds * 1000.0;
-    result += printf(" %3.7fms", ms);
+    printf(" %3.7fms", ms);
 
     if (byte_count > 0) {
       double gb = 1024.0 * 1024.0 * 1024.0;
       double gbps = byte_count / (gb * seconds);
-      result += printf(" %3.7f GB/s", gbps);
+      printf(" %3.7f GB/s", gbps);
     }
   }
 
   if (mem_page_fault_count > 0) {
     double kbpf = byte_count / (mem_page_fault_count * 1024.0);
-    result += printf(" PF: %0.4f (%0.4f kb/fault)", mem_page_fault_count, kbpf);
+    printf(" PF: %0.4f (%0.4f kb/fault)", mem_page_fault_count, kbpf);
   }
-
-  return result;
 }
 
 static uint32_t tester_is_testing(struct Tester *tester) {
-  static int width = 0;
-
   tester->iteration += 1;
 
   if (tester->state == TesterState_Testing) {
@@ -137,31 +116,23 @@ static uint32_t tester_is_testing(struct Tester *tester) {
       if (tester->state == TesterState_Testing) {
         struct TesterResults *results = &tester->results;
 
-        if (results->total.value[TestValue_test_count] == 0) {
-          width = 0;
+        for (uint32_t idx = 0; idx < TestValue_COUNT; idx += 1) {
+          results->total.value[idx] += test.value[idx];
         }
-
-        results->total.value[TestValue_test_count] += 1;
-        results->total.value[TestValue_tsc] += test.value[TestValue_tsc];
-        results->total.value[TestValue_byte_count] += test.value[TestValue_byte_count];
-        results->total.value[TestValue_mem_page_fault_count] += test.value[TestValue_mem_page_fault_count];
 
         uint32_t new_min = test.value[TestValue_tsc] < results->min.value[TestValue_tsc];
+        uint32_t new_max = test.value[TestValue_tsc] > results->min.value[TestValue_tsc];
+
         if (new_min) {
-          results->min = test;
+          results->min = test; // record new min test
+          tester->tsc_start = now; // reset timeout
 
-          tester->tsc_start = now;
+          printf("\033[2K\033[0G"); // clear and reset cursor on current line
+
+          test_values_print("min", results->min, tester->cpu_freq);
         }
-
-        if (tester->iteration == 1 || new_min) {
-          if (width) {
-            printf("%*s\r", width, "");
-          }
-          width = test_values_print("min", results->min, tester->cpu_freq);
-        }
-
-        if (test.value[TestValue_tsc] > results->max.value[TestValue_tsc]) {
-          results->max = test;
+        if (new_max) {
+          results->max = test; // record new max test
         }
 
         tester->begin_time_count = 0;
@@ -172,13 +143,12 @@ static uint32_t tester_is_testing(struct Tester *tester) {
       }
     }
 
+    //- cg: timeout, no changes have occurred in `tsc_wait`
     uint64_t tsc_since_change = now - tester->tsc_start;
     if (tsc_since_change > tester->tsc_wait) {
       tester->state = TesterState_Finished;
 
-      if (width) {
-        printf("%*s\r", width, "");
-      }
+      printf("\033[2K\033[0G");
 
       test_values_print("min", tester->results.min, tester->cpu_freq);
       printf("\n");
