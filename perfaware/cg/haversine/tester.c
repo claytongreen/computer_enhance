@@ -72,7 +72,7 @@ static void tester_new_wave(struct Tester *tester, uint64_t cpu_freq, uint64_t t
 
 static void test_values_print(char *label, struct TestValues values, uint64_t cpu_freq) {
   uint64_t test_count = values.value[TestValue_test_count];
-  double divisor = test_count ? (double)test_count : 1;
+  double divisor = (test_count != 0) ? (double)test_count : 1;
 
   double tsc = (double)values.value[TestValue_tsc] / divisor;
   double byte_count = (double)values.value[TestValue_byte_count] / divisor;
@@ -120,10 +120,10 @@ static uint32_t tester_is_testing(struct Tester *tester) {
           results->total.value[idx] += test.value[idx];
         }
 
-        uint32_t new_min = test.value[TestValue_tsc] < results->min.value[TestValue_tsc];
-        uint32_t new_max = test.value[TestValue_tsc] > results->min.value[TestValue_tsc];
+        uint32_t new_min = (test.value[TestValue_tsc] < results->min.value[TestValue_tsc]) ? 1 : 0;
+        uint32_t new_max = (test.value[TestValue_tsc] > results->min.value[TestValue_tsc]) ? 1 : 0;
 
-        if (new_min) {
+        if (new_min == 1) {
           results->min = test; // record new min test
           tester->tsc_start = now; // reset timeout
 
@@ -131,7 +131,7 @@ static uint32_t tester_is_testing(struct Tester *tester) {
 
           test_values_print("min", results->min, tester->cpu_freq);
         }
-        if (new_max) {
+        if (new_max == 1) {
           results->max = test; // record new max test
         }
 
@@ -140,6 +140,7 @@ static uint32_t tester_is_testing(struct Tester *tester) {
 
         // reset accumulator for the next test wave
         tester->test = (struct TestValues){ 0 };
+        tester->test.value[TestValue_test_count] = 1;
       }
     }
 
