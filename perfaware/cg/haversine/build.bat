@@ -11,10 +11,10 @@ where /Q cl.exe || (
    call "!VS!\VC\Auxiliary\Build\vcvarsall.bat" amd64 || exit /b 1
 )
 
-IF NOT EXIST build mkdir build
-pushd build
+IF NOT EXIST ..\build mkdir ..\build
+pushd ..\build
 
-set FLAGS=/nologo /arch:AVX512 /Zi /W4
+set FLAGS=/nologo /arch:AVX512 /Zi /W4 /FC
 set CFLAGS=%FLAGS% /std:c11
 
 rem call cl %FLAGS% /O2 ..\disasm\main.cpp /Fedisasm.exe
@@ -47,10 +47,9 @@ rem call nasm -f win64 -o mov.obj ..\mov.asm
 rem call lib /nologo mov.obj
 rem call cl %CFLAGS% ..\movasm.c /Femovasm.exe /Fmmovasm.map /link mov.lib
 
-call nasm -f win64 -o cache.obj ..\cache.asm
+call nasm -f win64 -o cache.obj ..\haversine\cache.asm
 call lib /nologo cache.obj
-call cl %CFLAGS% ..\cache.c /Fecache.exe /Fmcache.map /link cache.lib
-
+call cl %CFLAGS% ..\haversine\cache.c /Fecache.exe /Fmcache.map /link cache.lib
 
 popd
 

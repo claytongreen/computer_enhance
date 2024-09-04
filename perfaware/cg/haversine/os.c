@@ -44,6 +44,11 @@ static void *os_memory_commit(void *data, uint64_t size) {
   return result;
 }
 
+static void *os_memory_alloc(uint64_t size) {
+  void *result = VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+  return result;
+}
+
 static void *os_memory_zero(void *data, uint64_t size) {
   void *result = ZeroMemory(data, size);
   return result;
