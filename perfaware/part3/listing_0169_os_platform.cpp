@@ -11,10 +11,13 @@
    ======================================================================== */
 
 /* ========================================================================
-   LISTING 137
+   LISTING 169
    ======================================================================== */
 
 static u64 EstimateCPUTimerFreq(void);
+
+#define EXCESSIVE_FENCE _mm_mfence()
+#define MIN_OS_PAGE_SIZE 4096
 
 #if _WIN32
 
@@ -33,6 +36,14 @@ struct os_platform
     u64 CPUTimerFreq;
 };
 static os_platform GlobalOSPlatform;
+
+struct memory_mapped_file
+{
+    HANDLE File;
+    HANDLE Mapping;
+    
+    buffer Memory;
+};
 
 static u64 GetOSTimerFreq(void)
 {
@@ -71,6 +82,15 @@ static b32 ReadOSRandomBytes(u64 Count, void *Dest)
         Result = (BCryptGenRandom(0, (BYTE *)Dest, (u32)Count, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0);
     }
     
+    return Result;
+}
+
+static u64 GetFileSize(char *FileName)
+{
+    WIN32_FILE_ATTRIBUTE_DATA Data = {};
+    GetFileAttributesExA(FileName, GetFileExInfoStandard, &Data);
+    
+    u64 Result = (((u64)Data.nFileSizeHigh) << 32) | (u64)Data.nFileSizeLow;
     return Result;
 }
 
@@ -122,11 +142,84 @@ static void OSFree(size_t ByteCount, void *BaseAddress)
     VirtualFree(BaseAddress, 0, MEM_RELEASE);
 }
 
+typedef HANDLE thread_handle;
+#define THREAD_ENTRY_POINT(Name, Parameter) static DWORD WINAPI Name(void *Parameter)
+
+inline thread_handle CreateAndStartThread(LPTHREAD_START_ROUTINE ThreadFunction, void *ThreadParam)
+{
+    thread_handle Result = CreateThread(0, 0, ThreadFunction, ThreadParam, 0, 0);
+    return Result;
+}
+
+inline b32 IsValidThread(thread_handle Handle)
+{
+    b32 Result = (Handle != 0);
+    return Result;
+}
+
+inline memory_mapped_file OpenMemoryMappedFile(char const *FileName)
+{
+    memory_mapped_file MappedFile = {};
+    
+    MappedFile.File = CreateFileA(FileName, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, 0,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    MappedFile.Mapping = CreateFileMappingA(MappedFile.File, 0, PAGE_READONLY, 0, 0, 0);
+    
+    return MappedFile;
+}
+
+inline void SetMapRegion(memory_mapped_file *MappedFile, u64 Offset, u64 Size)
+{
+    if(IsValid(MappedFile->Memory))
+    {
+        UnmapViewOfFile(MappedFile->Memory.Data);
+        MappedFile->Memory = {};
+    }
+    
+    if(Size)
+    {
+        DWORD OffsetHigh = (DWORD)(Offset >> 32);
+        DWORD OffsetLow = (DWORD)(Offset & 0xffffffff);
+        u8 *Data = (u8 *)MapViewOfFile(MappedFile->Mapping, FILE_MAP_READ, OffsetHigh, OffsetLow, Size);
+        if(Data)
+        {
+            MappedFile->Memory.Count = Size;
+            MappedFile->Memory.Data = Data;
+        }
+    }
+}
+
+inline b32 IsValid(memory_mapped_file MappedFile)
+{
+    b32 Result = (MappedFile.Mapping != 0);
+    return Result;
+}
+
+inline void CloseMemoryMappedFile(memory_mapped_file *MappedFile)
+{
+    SetMapRegion(MappedFile, 0, 0);
+
+    if(MappedFile->Mapping)
+    {
+        CloseHandle(MappedFile->Mapping);
+    }
+    
+    if(MappedFile->File != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(MappedFile->File);
+    }
+    
+    *MappedFile = {};
+}
+
 #else
 
 #include <x86intrin.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 struct os_platform
 {
@@ -134,6 +227,12 @@ struct os_platform
     u64 CPUTimerFreq;
 };
 static os_platform GlobalOSPlatform;
+
+struct memory_mapped_file
+{
+    int File;
+    buffer Memory;
+};
 
 static u64 GetOSTimerFreq(void)
 {
@@ -186,6 +285,14 @@ static b32 ReadOSRandomBytes(u64 Count, void *Dest)
     return Result;
 }
 
+static u64 GetFileSize(char *FileName)
+{
+    struct stat Stat;
+    stat(FileName, &Stat);
+    
+    return Stat.st_size
+}
+
 static void InitializeOSPlatform(void)
 {
     if(!GlobalOSPlatform.Initialized)
@@ -204,6 +311,59 @@ static void *OSAllocate(size_t ByteCount)
 static void OSFree(size_t ByteCount, void *BaseAddress)
 {
     munmap(BaseAddress, ByteCount);
+}
+
+inline void CreateThread()
+{
+    IOThread = CreateThread(0, 0, IOThreadRoutine, &ThreadedIO, 0, 0);
+}
+
+inline memory_mapped_file OpenMemoryMappedFile(char const *FileName)
+{
+    memory_mapped_file MappedFile = {};
+    
+    MappedFile.File = open(FileName, O_RDONLY);
+    
+    return MappedFile;
+}
+
+inline void SetMapRegion(memory_mapped_file *MappedFile, u64 Offset, u64 Size)
+{
+    // NOTE(casey): The course materials are not tested on MacOS/Linux. This is
+    // a sketch of what you would do to memory-map a file on those platforms.
+
+    if(IsValid(MappedFile->Memory))
+    {
+        munmap(MappedFile->Memory.Data, MappedFile->Memory.Count);
+        MappedFile->Memory = {};
+    }
+    
+    if(Size)
+    {
+        u8 *Data = (u8 *)mmap(0, Size, PROT_READ, MAP_PRIVATE, MappedFile->File, Offset);
+        if(Data != MAP_FAILED)
+        {
+            MappedFile->Memory.Count = Size;
+            MappedFile->Memory.Data = Data;
+        }
+    }
+}
+
+inline b32 IsValid(memory_mapped_file MappedFile)
+{
+    b32 Result = (MappedFile.File >= 0);
+    return Result;
+}
+
+inline void CloseMemoryMappedFile(memory_mapped_file *MappedFile)
+{
+    SetMapRegion(MappedFile, 0, 0);
+    if(IsValid(*MappedFile))
+    {
+        close(MappedFile->File);
+    }
+    
+    *MappedFile = {};
 }
 
 #endif
@@ -233,7 +393,7 @@ inline u64 GetLargePageSize(void)
     return Result;
 }
 
-static u64 EstimateCPUTimerFreq(void)
+inline u64 EstimateCPUTimerFreq(void)
 {
 	u64 MillisecondsToWait = 100;
 	u64 OSFreq = GetOSTimerFreq();
@@ -276,4 +436,36 @@ inline void FillWithRandomBytes(buffer Dest)
         ReadOSRandomBytes(ReadCount, Dest.Data + AtOffset);
         AtOffset += ReadCount;
     }
+}
+
+inline buffer ReadEntireFile(char *FileName)
+{
+    buffer Result = {};
+    
+    FILE *File = fopen(FileName, "rb");
+    if(File)
+    {
+        Result = AllocateBuffer(GetFileSize(FileName));
+        if(Result.Data)
+        {
+            if(fread(Result.Data, Result.Count, 1, File) != 1)
+            {
+                fprintf(stderr, "ERROR: Unable to read \"%s\".\n", FileName);
+                FreeBuffer(&Result);
+            }
+        }
+        
+        fclose(File);
+    }
+    else
+    {
+        fprintf(stderr, "ERROR: Unable to open \"%s\".\n", FileName);
+    }
+    
+    return Result;
+}
+
+inline void CPUWaitLoop(void)
+{
+    _mm_pause();
 }

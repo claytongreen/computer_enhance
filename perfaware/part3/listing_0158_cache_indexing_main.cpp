@@ -11,7 +11,7 @@
    ======================================================================== */
 
 /* ========================================================================
-   LISTING 155
+   LISTING 158
    ======================================================================== */
 
 /* NOTE(casey): _CRT_SECURE_NO_WARNINGS is here because otherwise we cannot
@@ -44,33 +44,20 @@ typedef double f64;
 #include "listing_0137_os_platform.cpp"
 #include "listing_0109_pagefault_repetition_tester.cpp"
 
-extern "C" void DoubleLoopRead_32x8(u64 Count, u8 *Data, u64 Mask);
-#pragma comment (lib, "listing_0154_npt_cache_test")
+extern "C" void ReadStrided_32x2(u64 Count, u8 *Data, u64 ReadsPerBlock, u64 Stride);
+#pragma comment (lib, "listing_0157_cache_indexing")
 
 int main(void)
 {
     InitializeOSPlatform();
     
-    u64 RegionSizes[64] = {};
-    repetition_tester Testers[ArrayCount(RegionSizes)] = {};
-    u64 InnerLoopSize = 256;
+    repetition_tester Testers[128] = {};
+    u64 CacheLineSize = 64;
+    u64 RepCount = 64;
+    u64 ReadCount = 256;
+    u64 TotalBytes = RepCount*ReadCount*CacheLineSize;
     
-    u64 SizeDelta = 512;
-    u64 AccumulatedSize = 4*1024;
-    for(u32 TestIndex = 0; TestIndex < ArrayCount(Testers); ++TestIndex)
-    {
-        RegionSizes[TestIndex] = AccumulatedSize;
-        
-        // NOTE(casey): Increase the delta every time we hit an even power of two
-        // (just so we don't have to do too many tests to cover the typical cache ranges)
-        if(((AccumulatedSize - 1) & AccumulatedSize) == 0)
-        {
-            SizeDelta *= 2;
-        }
-        AccumulatedSize += SizeDelta;
-    }
-    
-    buffer Buffer = AllocateBuffer(1024ull*1024*1024);
+    buffer Buffer = AllocateBuffer(ReadCount * (CacheLineSize*ArrayCount(Testers)));
     if(IsValid(Buffer))
     {
         // NOTE(casey): Because OSes may not map allocated pages until they are written to, we write garbage
@@ -80,41 +67,36 @@ int main(void)
             Buffer.Data[ByteIndex] = (u8)ByteIndex;
         }
         
-        for(u32 TestIndex = 0; TestIndex < ArrayCount(Testers); ++TestIndex)
+        for(u64 StrideIndex = 0; StrideIndex < ArrayCount(Testers); ++StrideIndex)
         {
-            repetition_tester *Tester = Testers + TestIndex;
+            repetition_tester *Tester = Testers + StrideIndex;
             
-            u64 RegionSize = RegionSizes[TestIndex];
-
-            u64 OuterLoopCount = Buffer.Count/RegionSize;
-            u64 InnerLoopCount = RegionSize/InnerLoopSize;
-            u64 TotalSize = OuterLoopCount*RegionSize;
-            
-            printf("\n--- Read32x8, %llu outer x %llu inner x %llu bytes = %llu bytes in %lluk chunks ---\n",
-                   OuterLoopCount, InnerLoopCount, InnerLoopSize, TotalSize, RegionSize/1024);
-            
-            NewTestWave(Tester, TotalSize, GetCPUTimerFreq());
+            u64 Stride = CacheLineSize*StrideIndex;
+            printf("\n--- ReadStrided_32x8 of %llu lines spaced %llu bytes apart (total span: %llu) ---\n",
+                   ReadCount, Stride, ReadCount*Stride);
+            NewTestWave(Tester, TotalBytes, GetCPUTimerFreq());
             
             while(IsTesting(Tester))
             {
                 BeginTime(Tester);
-                DoubleLoopRead_32x8(OuterLoopCount, Buffer.Data, InnerLoopCount);
+                ReadStrided_32x2(RepCount, Buffer.Data, ReadCount, Stride);
                 EndTime(Tester);
-                CountBytes(Tester, TotalSize);
+                CountBytes(Tester, TotalBytes);
             }
         }
         
-        printf("Region Size,gb/s\n");
-        for(u32 TestIndex = 0; TestIndex < ArrayCount(Testers); ++TestIndex)
+        printf("Stride,gb/s\n");
+        for(u64 StrideIndex = 0; StrideIndex < ArrayCount(Testers); ++StrideIndex)
         {
-            repetition_tester *Tester = Testers + TestIndex;
+            repetition_tester *Tester = Testers + StrideIndex;
             
             repetition_value Value = Tester->Results.Min;
             f64 Seconds = SecondsFromCPUTime((f64)Value.E[RepValue_CPUTimer], Tester->CPUTimerFreq);
             f64 Gigabyte = (1024.0f * 1024.0f * 1024.0f);
             f64 Bandwidth = Value.E[RepValue_ByteCount] / (Gigabyte * Seconds);
                 
-            printf("%llu,%f\n", RegionSizes[TestIndex], Bandwidth);
+            u64 Stride = CacheLineSize*StrideIndex;
+            printf("%llu,%f\n", Stride, Bandwidth);
         }
     }
     else
